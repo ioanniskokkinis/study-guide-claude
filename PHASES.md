@@ -45,7 +45,23 @@ each phase depends on the previous one's persisted data model.
       question selection from this engine instead of its own logic; a new
       `/courses/:id/study` dashboard surfaces the recommendation with an
       accept/override choice and a real-data progress list.
-- [ ] **Phase 7 — Socratic + teach-back.**
+- [x] **Phase 7 — Intelligent tutor engine.** A deterministic `TutorEngine`
+      (`src/lib/tutor/`) that decides the next pedagogical move — ask,
+      follow up, hint, explain, simplify, deepen, check a prerequisite,
+      remediate, teach-back, adjust difficulty, or complete — from student
+      state, never from raw Claude output. Three modes (Socratic, teach-back,
+      remediation) share one engine; Socratic depth is capped and escalates
+      through progressive hints before falling back to a direct explanation;
+      the remediation loop explains a small piece, asks an easy question,
+      and only exits after independent success. Misconceptions persist to
+      `StudentMisconception` and require multiple pieces of independent
+      evidence to resolve — never a single correct answer. Confident-but-wrong
+      answers are flagged as an illusion-of-competence override. Prerequisite
+      redirects and difficulty reuse the Phase 6 adaptive engine rather than
+      duplicating its logic. Hints weaken mastery evidence progressively;
+      a revealed answer produces no evidence of its own, only the mandatory
+      retrieval question that follows it does. A chat-style
+      `/courses/:id/tutor` UI drives the conversation end to end.
 - [ ] **Phase 8 — Exams.** Diagnostic, written exam, exam simulation.
 - [ ] **Phase 9 — Spaced repetition.** Review scheduling.
 - [ ] **Phase 10 — Polish.** Dashboard, progress charts, UX, performance,

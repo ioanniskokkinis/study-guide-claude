@@ -17,6 +17,12 @@ const envSchema = z.object({
   AI_MODEL_ANSWER_EVALUATION: z.enum(["fast", "default"]).default("default"),
   AI_MODEL_HINT_GENERATION: z.enum(["fast", "default"]).default("fast"),
   DEFAULT_RECALL_SESSION_LENGTH: z.coerce.number().int().positive().default(10),
+  // Phase 7 (Intelligent Tutor): evaluation needs the stronger model
+  // (classifying a free-text response, including misconception detection,
+  // is the hard reasoning step); generation (Socratic questions, hints,
+  // explanations) uses the cheaper/faster model, same split as Phase 5.
+  AI_MODEL_TUTOR_EVALUATION: z.enum(["fast", "default"]).default("default"),
+  AI_MODEL_TUTOR_GENERATION: z.enum(["fast", "default"]).default("fast"),
 });
 
 export type Env = z.infer<typeof envSchema>;

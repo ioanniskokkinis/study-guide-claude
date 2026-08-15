@@ -4,10 +4,11 @@ An adaptive AI tutor that builds a persistent model of what a student knows,
 diagnoses gaps, and chooses the next best learning action — not a chatbot
 with PDFs attached.
 
-This repo is built in phases (see `PHASES.md` for status). **Phases 1–6
+This repo is built in phases (see `PHASES.md` for status). **Phases 1–7
 (foundation, course ingestion, knowledge graph, student knowledge model,
-Active Recall, adaptive engine) are complete**; the remaining study modes
-described in the full product spec ship in later phases.
+Active Recall, adaptive engine, intelligent tutor) are complete**; the
+remaining study modes described in the full product spec ship in later
+phases.
 
 ## Stack
 
@@ -378,6 +379,108 @@ Only the downstream question-generation/evaluation step (unchanged from
 Phase 5) needs the missing key, and it still fails cleanly (502, no
 orphaned session).
 
+## Intelligent tutor engine (Phase 7)
+
+A chat-style tutor that decides, turn by turn, *how* to teach — not just
+*what* to ask. Claude generates the language (questions, hints,
+explanations, evaluations); a deterministic `TutorEngine` decides the
+action. Claude never picks the next step directly — every decision goes
+through `TutorDecisionSchema.parse()`, and mastery/prerequisites/
+completion/session state are always application-controlled, never invented
+by the model (spec §5).
+
+```
+src/lib/tutor/
+  types.ts              TutorContext, TutorDecision (Zod-validated),
+                         ResponseEvaluation/TeachBackEvaluation schemas
+  config.ts              named thresholds (MAX_SOCRATIC_DEPTH=4,
+                         REPEATED_FAILURE_THRESHOLD=3, teach-back score
+                         bands, misconception resolution/decay constants,
+                         hint evidence-discount factors)
+  tutor-state.ts         builds TutorContext from targeted queries; reuses
+                         the Phase 6 adaptive engine's own concept-value
+                         calculation for prerequisite blocking rather than
+                         re-deriving it
+  hints.ts                deterministic hint-level state machine
+                         (0/HINT_1/HINT_2/HINT_3/REVEAL) + the evidence
+                         discount a hinted correct answer gets — level
+                         selection needs no Claude call
+  misconceptions.ts      StudentMisconception create/reinforce/decay;
+                         requires multiple pieces of independent evidence
+                         to resolve, never a single correct answer
+  socratic.ts             Socratic mode: one question at a time, escalating
+                         simplify -> hint -> hint -> hint -> explanation,
+                         handing off to remediation on repeated failure
+  remediation.ts          explain a small piece -> easy question -> evaluate
+                         -> retry -> only increase difficulty (exit) after
+                         two independent correct answers
+  teach-back.ts            scores an explanation (correctness/completeness/
+                         conceptualAccuracy/misconception penalty, spec
+                         §20) and bands it into deepen/follow-up/remediate/
+                         check-prerequisite
+  decision-support.ts     shared TutorDecision-building primitives (kept
+                         separate from tutor-decision.ts to avoid a
+                         circular import with the three mode files above)
+  tutor-decision.ts       the deterministic dispatcher: cross-cutting
+                         overrides first ("just tell me", "I don't know",
+                         illusion-of-competence, misconception/prerequisite
+                         override, session completion), then delegates to
+                         whichever mode file applies
+  tutor-engine.ts         thin public facade (`TutorEngine.decide()`) over
+                         tutor-decision.ts, so the engine's own file stays
+                         short and readable rather than "1000 lines of
+                         unexplained conditions" (spec §6)
+  tutor-prompts.ts / tutor-evaluator.ts
+                          every Claude call the tutor makes, each paired
+                         with a Zod schema; explicit "I don't know"/"just
+                         tell me" phrases are detected deterministically
+                         and never reach Claude; every generator has a
+                         deterministic fallback if Claude fails (spec §55)
+  tutor-orchestrator.ts   the full pipeline: load state -> evaluate ->
+                         record evidence -> consult the engine -> generate
+                         content -> validate -> persist -> return
+```
+
+**Illusion of competence** (spec §30): a response classified INCORRECT
+while the student self-reports CONFIDENT is escalated to a misconception
+override rather than logged as ordinary weakness.
+
+**Hints weaken evidence, reveal produces none of its own** (spec §24, §46):
+a correct answer given after a hint is scored at a fraction of full
+credit before it reaches `recordLearningOutcome()` — HINT_1 ≈ 85%, HINT_2 ≈
+65%, HINT_3 ≈ 40%. A REVEAL is not an answer attempt at all, so it produces
+no evidence; the mandatory retrieval question that follows it is a fresh,
+independent attempt and counts at full weight.
+
+**Prerequisite redirects and difficulty reuse Phase 6** (spec §17, §25,
+§40): `tutor-state.ts` calls the adaptive engine's own
+`calculateConceptValue()` for blocking detection, and difficulty comes from
+Phase 5's `selectDifficultyForConcept()` — nothing here re-implements
+either.
+
+API surface:
+
+```
+POST /api/tutor/sessions                      start (or resume the active one for the same concept)
+POST /api/tutor/sessions/:id/messages         submit the student's next message
+POST /api/tutor/sessions/:id/hint              proactive hint (escalates one level)
+POST /api/tutor/sessions/:id/teach-back        switch an in-progress session into teach-back mode
+GET  /api/tutor/sessions/:id                   reconstruct the conversation after a refresh
+```
+
+UI: `/courses/:id/tutor` — pick a concept, then a simple chat: topic,
+mastery, message history, a text input, a confidence selector
+(confident/unsure/guessing), and Hint / "I don't know" / "Just tell me" /
+"Explain it back to me" shortcuts. Linked from the study dashboard.
+
+**Known limitation:** same as Phases 3/5/6 — no live `ANTHROPIC_API_KEY` in
+this sandbox. Every Claude-backed generator has a deterministic fallback
+(spec §55), so the full pipeline — session start, hint escalation through
+REVEAL, misconception detection and prerequisite redirect, teach-back
+scoring, and session completion — was verified live end-to-end against the
+running server and real Postgres using those fallback paths; only the
+*language* would be templated rather than model-generated without a key.
+
 ## Scripts
 
 | Script | Purpose |
@@ -396,15 +499,15 @@ orphaned session).
 ```
 src/
   app/
-    courses/                          Courses list, course/document/knowledge-graph/study pages
+    courses/                          Courses list, course/document/knowledge-graph/study/tutor pages
     concepts/[id]/                    Concept detail page
     api/courses, api/documents/,
     api/concepts/, api/study-sessions/,
     api/mistakes/, api/goals/,
-    api/next-action/                  Route handlers (see API surfaces above)
+    api/next-action/, api/tutor/       Route handlers (see API surfaces above)
   components/courses, documents/,
-             knowledge/, study/        Client components (upload, delete, forms, graph viz,
-                                        Active Recall session UI, adaptive dashboard)
+             knowledge/, study/, tutor/ Client components (upload, delete, forms, graph viz,
+                                        Active Recall session UI, adaptive dashboard, tutor chat)
   lib/
     ai/                Server-side Claude service (claude.ts), retry.ts, answer-evaluator.ts
       prompts/         Prompt templates + their Zod output schemas, kept out of components
@@ -416,6 +519,8 @@ src/
     learning/           mastery-engine.ts, confidence-calibrator.ts, record-outcome.ts (Phase 4);
                          difficulty-engine.ts, question-generator.ts, study-session.ts (Phase 5);
                          adaptive-engine.ts + adaptive/ (Phase 6 — deterministic decision engine)
+    tutor/              tutor-engine.ts, tutor-decision.ts, tutor-orchestrator.ts + socratic.ts/
+                         remediation.ts/teach-back.ts/hints.ts/misconceptions.ts (Phase 7)
     services/          Ownership-checked course/document/knowledge/student-knowledge/
                         learning-goals business logic
     storage/           Storage abstraction (local FS now, S3-compatible later)

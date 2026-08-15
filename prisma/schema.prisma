@@ -28,17 +28,19 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses              Course[]
-  masteries            StudentConceptMastery[]
-  answers              Answer[]
-  studentMistakes      StudentMistake[]
-  reviews              Review[]
-  aiUsageLogs          AiUsageLog[]
-  learningAttempts     LearningAttempt[]
-  knowledgeEvidence    KnowledgeEvidence[]
-  studySessions        StudySession[]
-  learningGoals        LearningGoal[]
-  adaptiveDecisionLogs AdaptiveDecisionLog[]
+  courses               Course[]
+  masteries             StudentConceptMastery[]
+  answers               Answer[]
+  studentMistakes       StudentMistake[]
+  reviews               Review[]
+  aiUsageLogs           AiUsageLog[]
+  learningAttempts      LearningAttempt[]
+  knowledgeEvidence     KnowledgeEvidence[]
+  studySessions         StudySession[]
+  learningGoals         LearningGoal[]
+  adaptiveDecisionLogs  AdaptiveDecisionLog[]
+  tutorSessions         TutorSession[]
+  studentMisconceptions StudentMisconception[]
 
   @@map("users")
 }
@@ -78,6 +80,7 @@ model Course {
   studySessions        StudySession[]
   learningGoals        LearningGoal[]
   adaptiveDecisionLogs AdaptiveDecisionLog[]
+  tutorSessions        TutorSession[]
 
   @@index([userId])
   @@map("courses")
@@ -176,13 +179,16 @@ model Concept {
   relationshipsAsSource ConceptRelationship[] @relation("RelationshipSource")
   relationshipsAsTarget ConceptRelationship[] @relation("RelationshipTarget")
 
-  masteries            StudentConceptMastery[]
-  questions            Question[]
-  studentMistakes      StudentMistake[]
-  reviews              Review[]
-  learningAttempts     LearningAttempt[]
-  knowledgeEvidence    KnowledgeEvidence[]
-  adaptiveDecisionLogs AdaptiveDecisionLog[]
+  masteries             StudentConceptMastery[]
+  questions             Question[]
+  studentMistakes       StudentMistake[]
+  reviews               Review[]
+  learningAttempts      LearningAttempt[]
+  knowledgeEvidence     KnowledgeEvidence[]
+  adaptiveDecisionLogs  AdaptiveDecisionLog[]
+  tutorSessions         TutorSession[]
+  studentMisconceptions StudentMisconception[]
+  tutorSessionOutcomes  TutorSessionOutcome[]
 
   // Prevents duplicate concepts within a course (spec §2, §11 dedup).
   @@unique([courseId, normalizedName])
@@ -745,6 +751,176 @@ model AdaptiveDecisionLog {
   @@index([userId, courseId])
   @@index([createdAt])
   @@map("adaptive_decision_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Intelligent tutor engine (Phase 7)
+//
+// A TutorSession is a multi-turn conversation on one concept, distinct from
+// a Phase 5 StudySession (single question/answer turns): it tracks Socratic
+// depth, hint level, and mode across many TutorMessage rows. The engine
+// itself (src/lib/tutor/) is a deterministic decision layer over this state
+// plus the Phase 4 student model and the Phase 6 AdaptiveLearningEngine —
+// nothing here duplicates mastery, prerequisite, or difficulty logic.
+// ---------------------------------------------------------------------------
+
+enum TutorMode {
+  SOCRATIC
+  TEACH_BACK
+  REMEDIATION
+}
+
+enum TutorSessionStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ABANDONED
+}
+
+/// Mirrors the TutorEngine's TutorDecision action union (src/lib/tutor/types.ts).
+enum TutorDecisionAction {
+  ASK_QUESTION
+  ASK_FOLLOWUP
+  GIVE_HINT
+  GIVE_EXPLANATION
+  SIMPLIFY
+  DEEPEN
+  CHECK_PREREQUISITE
+  REMEDIATE
+  TEACH_BACK
+  INCREASE_DIFFICULTY
+  DECREASE_DIFFICULTY
+  COMPLETE
+}
+
+model TutorSession {
+  id          String               @id @default(cuid())
+  userId      String
+  courseId    String
+  conceptId   String
+  mode        TutorMode            @default(SOCRATIC)
+  status      TutorSessionStatus   @default(ACTIVE)
+  /// The last TutorDecision action taken, so the UI/orchestrator can resume after a refresh without replaying history.
+  currentStep TutorDecisionAction?
+
+  /// Socratic questioning depth (spec §9) — capped at MAX_SOCRATIC_DEPTH (4).
+  socraticDepth Int @default(0)
+  /// 0 = no hint requested yet on the current open question; 1-3 = HINT_1..HINT_3; 4 = REVEAL.
+  hintLevel     Int @default(0)
+  difficulty    Int @default(1)
+
+  /// Consecutive independent (non-revealed) correct responses on this session's concept — drives the completion criteria (spec §49).
+  consecutiveCorrect      Int     @default(0)
+  /// Consecutive non-correct responses on this session's concept — drives the repeated-failure -> REMEDIATE transition (spec §10, §15).
+  consecutiveIncorrect    Int     @default(0)
+  questionsAnswered       Int     @default(0)
+  hintsUsedTotal          Int     @default(0)
+  /// True while the most recently revealed answer's mandatory retrieval follow-up (spec §46-47) hasn't been asked yet.
+  answerRevealed          Boolean @default(false)
+  /// Last explanation strategy used (analogy/example/counterexample/step-by-step/compare-contrast) — never repeated back-to-back (spec §28).
+  lastExplanationStrategy String?
+  /// Running count of Claude calls made for this session (spec §54, optional cost tracking).
+  aiCallCount             Int     @default(0)
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  messages TutorMessage[]
+  outcome  TutorSessionOutcome?
+
+  @@index([userId, courseId])
+  @@index([userId, status])
+  @@map("tutor_sessions")
+}
+
+enum TutorMessageRole {
+  TUTOR
+  STUDENT
+  SYSTEM
+}
+
+enum TutorMessageType {
+  QUESTION
+  FOLLOWUP
+  HINT
+  EXPLANATION
+  FEEDBACK
+  TEACH_BACK_PROMPT
+  REMEDIATION
+  COMPLETION
+}
+
+/// Persists only what's needed to reconstruct the conversation and its
+/// evidence trail (spec §33) — never raw prompts or chain-of-thought.
+model TutorMessage {
+  id          String           @id @default(cuid())
+  sessionId   String
+  role        TutorMessageRole
+  content     String
+  messageType TutorMessageType
+  /// Concise structured metadata (e.g. decision action, hint level, classification) — never hidden reasoning.
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  session TutorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("tutor_messages")
+}
+
+/// A misconception is never cleared by a single correct answer (spec §13) —
+/// `confidence` decays only as independent evidence accumulates, tracked via
+/// `correctSinceCount`, and `resolved` flips only once both cross their
+/// thresholds (see src/lib/tutor/misconceptions.ts).
+model StudentMisconception {
+  id                String          @id @default(cuid())
+  userId            String
+  conceptId         String
+  description       String
+  severity          MistakeSeverity @default(MEDIUM)
+  /// 0-1; starts high on detection, decreases with independent correct evidence.
+  confidence        Float           @default(1.0)
+  /// Number of times this misconception has been (re-)detected.
+  occurrenceCount   Int             @default(1)
+  /// Independent correct responses on this concept since the misconception was last (re-)detected.
+  correctSinceCount Int             @default(0)
+  firstDetectedAt   DateTime        @default(now())
+  lastDetectedAt    DateTime        @default(now())
+  resolved          Boolean         @default(false)
+  resolvedAt        DateTime?
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@index([userId, conceptId])
+  @@index([resolved])
+  @@map("student_misconceptions")
+}
+
+/// Written once a TutorSession completes (spec §50) — masteryDelta is read
+/// back from the StudentConceptMastery change recordLearningOutcome() already
+/// produced, never invented by the tutor itself.
+model TutorSessionOutcome {
+  id                    String   @id @default(cuid())
+  sessionId             String   @unique
+  conceptId             String
+  masteryDelta          Float?
+  misconceptionResolved Boolean  @default(false)
+  hintsUsed             Int      @default(0)
+  questionsAnswered     Int      @default(0)
+  teachBackScore        Float?
+  completedAt           DateTime @default(now())
+
+  session TutorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  concept Concept      @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@map("tutor_session_outcomes")
 }
 
 // ---------------------------------------------------------------------------

@@ -54,6 +54,9 @@ export default async function StudyDashboardPage({ params }: PageProps) {
           <div className="mt-6">
             <AdaptiveDashboard courseId={course.id} concepts={concepts.map((c) => ({ id: c.conceptId, name: c.conceptName, mastery: c.overallMastery, exposureCount: c.exposureCount }))} />
             <ExamGoalForm courseId={course.id} />
+            <Link href={`/courses/${course.id}/tutor`} className="mt-4 inline-block text-sm text-zinc-500 underline-offset-2 hover:underline">
+              Or talk it through with the AI Tutor →
+            </Link>
           </div>
 
           <div className="mt-10">
