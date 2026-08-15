@@ -7,8 +7,11 @@ each phase depends on the previous one's persisted data model.
       PostgreSQL + Prisma (driver adapters) + pgvector, full domain schema
       migrated, environment configuration, `/api/health`, minimal status
       page, Vitest harness.
-- [ ] **Phase 2 — Course ingestion.** Create course, upload PDF, extract
-      text, store document, chunk document, source references.
+- [x] **Phase 2 — Course ingestion.** Course CRUD, PDF upload (validated,
+      stored outside the public dir), deterministic text extraction and
+      paragraph-aware chunking (no LLM calls, no embeddings yet), a
+      synchronous upload→extract→chunk→ready/failed pipeline, and courses
+      / course-detail / document-detail pages.
 - [ ] **Phase 3 — Knowledge graph.** Concept extraction, prerequisite
       extraction, concept graph, concept pages.
 - [ ] **Phase 4 — Student model.** Mastery, attempts, mistakes, confidence,

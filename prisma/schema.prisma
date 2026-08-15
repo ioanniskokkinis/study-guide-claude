@@ -26,12 +26,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses          Course[]
-  masteries        StudentConceptMastery[]
-  answers          Answer[]
-  mistakes         Mistake[]
-  reviews          Review[]
-  aiUsageLogs      AiUsageLog[]
+  courses     Course[]
+  masteries   StudentConceptMastery[]
+  answers     Answer[]
+  mistakes    Mistake[]
+  reviews     Review[]
+  aiUsageLogs AiUsageLog[]
 
   @@map("users")
 }
@@ -54,7 +54,7 @@ model Course {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   documents Document[]
   concepts  Concept[]
 
@@ -69,22 +69,27 @@ enum DocumentType {
 }
 
 enum ProcessingStatus {
-  pending
-  processing
-  completed
-  failed
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
 }
 
 model Document {
-  id                String            @id @default(cuid())
-  courseId          String
-  filename          String
-  type              DocumentType
-  storagePath       String
-  extractedText     String?
-  processingStatus  ProcessingStatus  @default(pending)
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  id               String           @id @default(cuid())
+  courseId         String
+  filename         String
+  originalFilename String
+  mimeType         String
+  fileSize         Int
+  type             DocumentType
+  storagePath      String
+  extractedText    String?
+  processingStatus ProcessingStatus @default(UPLOADED)
+  processingError  String?
+  pageCount        Int?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   course Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
   chunks DocumentChunk[]
@@ -94,12 +99,14 @@ model Document {
 }
 
 model DocumentChunk {
-  id         String                      @id @default(cuid())
+  id         String                       @id @default(cuid())
   documentId String
   text       String
   chunkIndex Int
+  tokenCount Int
   embedding  Unsupported("vector(1536)")?
   metadata   Json?
+  createdAt  DateTime                     @default(now())
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
@@ -137,11 +144,11 @@ model Concept {
 }
 
 model Prerequisite {
-  id                     String @id @default(cuid())
-  prerequisiteConceptId  String
-  dependentConceptId     String
-  strength               Float  @default(1.0)
-  confidence             Float  @default(1.0)
+  id                    String @id @default(cuid())
+  prerequisiteConceptId String
+  dependentConceptId    String
+  strength              Float  @default(1.0)
+  confidence            Float  @default(1.0)
 
   prerequisiteConcept Concept @relation("PrerequisiteConcept", fields: [prerequisiteConceptId], references: [id], onDelete: Cascade)
   dependentConcept    Concept @relation("DependentConcept", fields: [dependentConceptId], references: [id], onDelete: Cascade)
@@ -164,28 +171,28 @@ enum MasteryStatus {
 }
 
 model StudentConceptMastery {
-  id                String        @id @default(cuid())
-  userId            String
-  conceptId         String
+  id        String @id @default(cuid())
+  userId    String
+  conceptId String
 
-  recallScore       Float         @default(0)
-  explanationScore  Float         @default(0)
-  applicationScore  Float         @default(0)
-  transferScore     Float         @default(0)
-  confidenceScore   Float         @default(0)
-  overallMastery    Float         @default(0)
+  recallScore      Float @default(0)
+  explanationScore Float @default(0)
+  applicationScore Float @default(0)
+  transferScore    Float @default(0)
+  confidenceScore  Float @default(0)
+  overallMastery   Float @default(0)
 
-  exposureCount     Int           @default(0)
-  successCount      Int           @default(0)
-  failureCount      Int           @default(0)
+  exposureCount Int @default(0)
+  successCount  Int @default(0)
+  failureCount  Int @default(0)
 
-  lastReviewedAt    DateTime?
-  nextReviewAt      DateTime?
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime?
 
-  status            MasteryStatus @default(unknown)
+  status MasteryStatus @default(unknown)
 
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
@@ -305,15 +312,15 @@ enum ReviewOutcome {
 }
 
 model Review {
-  id           String         @id @default(cuid())
-  userId       String
-  conceptId    String
-  scheduledAt  DateTime
-  completedAt  DateTime?
-  outcome      ReviewOutcome?
-  interval     Float          @default(0)
-  ease         Float          @default(2.5)
-  repetitions  Int            @default(0)
+  id          String         @id @default(cuid())
+  userId      String
+  conceptId   String
+  scheduledAt DateTime
+  completedAt DateTime?
+  outcome     ReviewOutcome?
+  interval    Float          @default(0)
+  ease        Float          @default(2.5)
+  repetitions Int            @default(0)
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
@@ -328,14 +335,14 @@ model Review {
 // ---------------------------------------------------------------------------
 
 model AiUsageLog {
-  id              String   @id @default(cuid())
-  userId          String?
-  model           String
-  inputTokens     Int
-  outputTokens    Int
+  id               String   @id @default(cuid())
+  userId           String?
+  model            String
+  inputTokens      Int
+  outputTokens     Int
   estimatedCostUsd Float
-  requestType     String
-  createdAt       DateTime @default(now())
+  requestType      String
+  createdAt        DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
