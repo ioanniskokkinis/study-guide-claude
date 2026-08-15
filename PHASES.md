@@ -62,7 +62,26 @@ each phase depends on the previous one's persisted data model.
       a revealed answer produces no evidence of its own, only the mandatory
       retrieval question that follows it does. A chat-style
       `/courses/:id/tutor` UI drives the conversation end to end.
-- [ ] **Phase 8 — Exams.** Diagnostic, written exam, exam simulation.
+- [x] **Phase 8 — Exam & assessment engine.** A deterministic `ExamEngine`
+      (`src/lib/exam/`) covering the full learn → practice → exam →
+      diagnose → remediate → retest loop. `exam-blueprint.ts` allocates
+      broad-but-diagnostic-tilted coverage from the Student Knowledge
+      Model (weak concepts get more questions, strong ones are never
+      dropped); `exam-generator.ts` produces source-grounded questions
+      across 8 formats (multiple choice through scenario and teach-back)
+      reusing the same grounding-refusal discipline as Phase 5;
+      `exam-grader.ts` auto-grades objective formats with zero Claude
+      calls and combines Claude's rubric-criterion scores into a
+      deterministic final score the model never controls directly;
+      `mistake-analyzer.ts` classifies failures and walks the full
+      prerequisite chain rather than assuming the tested concept is the
+      real gap; `exam-readiness.ts` and `adaptive-exam.ts`/`oral-exam.ts`
+      reuse the Phase 6 adaptive engine's own scoring instead of a second
+      mastery model. Exam mode strictly withholds hints/explanations/
+      grades until submission; timing and grading are always server-side
+      and idempotent. A written/scenario/adaptive exam UI, a simple
+      text-based oral examiner chat, a results/readiness dashboard, and a
+      one-click targeted retest round out `/courses/:id/exam`.
 - [ ] **Phase 9 — Spaced repetition.** Review scheduling.
 - [ ] **Phase 10 — Polish.** Dashboard, progress charts, UX, performance,
       tests, error handling.

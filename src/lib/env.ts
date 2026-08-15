@@ -23,6 +23,11 @@ const envSchema = z.object({
   // explanations) uses the cheaper/faster model, same split as Phase 5.
   AI_MODEL_TUTOR_EVALUATION: z.enum(["fast", "default"]).default("default"),
   AI_MODEL_TUTOR_GENERATION: z.enum(["fast", "default"]).default("fast"),
+  // Phase 8 (Exam & Assessment Engine): grading (open-ended/scenario/oral
+  // rubric scoring) needs the stronger model; question generation uses the
+  // cheaper/faster one — same split as Phase 5/7.
+  AI_MODEL_EXAM_GENERATION: z.enum(["fast", "default"]).default("fast"),
+  AI_MODEL_EXAM_GRADING: z.enum(["fast", "default"]).default("default"),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -4,11 +4,11 @@ An adaptive AI tutor that builds a persistent model of what a student knows,
 diagnoses gaps, and chooses the next best learning action — not a chatbot
 with PDFs attached.
 
-This repo is built in phases (see `PHASES.md` for status). **Phases 1–7
+This repo is built in phases (see `PHASES.md` for status). **Phases 1–8
 (foundation, course ingestion, knowledge graph, student knowledge model,
-Active Recall, adaptive engine, intelligent tutor) are complete**; the
-remaining study modes described in the full product spec ship in later
-phases.
+Active Recall, adaptive engine, intelligent tutor, exam & assessment
+engine) are complete**; the remaining study modes described in the full
+product spec ship in later phases.
 
 ## Stack
 
@@ -481,6 +481,133 @@ scoring, and session completion — was verified live end-to-end against the
 running server and real Postgres using those fallback paths; only the
 *language* would be templated rather than model-generated without a key.
 
+## Exam & assessment engine (Phase 8)
+
+The learn → practice → **exam** → diagnose → remediate → **retest** loop.
+An exam measures independent performance — no hints, explanations, or
+grades leak out while it's active (spec §14, §53) — and every score,
+timing check, and pass/fail decision is calculated server-side and never
+trusted from the client (spec §55).
+
+```
+src/lib/exam/
+  types.ts              ExamConfig/ExamBlueprint types, Zod schemas for
+                         every Claude-facing structured output
+  config.ts               named thresholds (diagnostic coverage ratios,
+                         cognitive distribution, rubric weights, readiness
+                         weights, adaptive/oral thresholds) — configurable
+                         per exam, never hardcoded inline (spec §11)
+  exam-blueprint.ts       deterministic coverage allocation from the
+                         Student Knowledge Model: weak/unknown concepts
+                         get a larger diagnostic share, strong concepts
+                         are never dropped (broad coverage, spec §10),
+                         and no single concept can dominate the exam
+  exam-generator.ts       reuse-before-generate question generation across
+                         8 formats (MC/multi-select/true-false/short
+                         answer/open-ended/problem-solving/scenario/
+                         teach-back) — same grounding-refusal discipline
+                         as Phase 5's question-generator.ts, extended with
+                         a response-format axis Question doesn't have
+  exam-prompts.ts / exam-evaluator.ts
+                          every Claude call: question generation, rubric
+                         grading, and the oral examiner's questions —
+                         each paired with a Zod schema; grading has a
+                         deterministic fallback so a Claude outage never
+                         blocks finishing an exam already in progress
+  exam-grader.ts          deterministic scoring: multiple-choice/true-
+                         false/multi-select are graded with zero Claude
+                         calls; open-ended/scenario/oral answers combine
+                         Claude's per-criterion rubric scores into one
+                         final score via fixed weights — Claude never
+                         decides the grade (spec §22-23)
+  mistake-analyzer.ts     classifies each miss (knowledge gap, misconception,
+                         recall/reasoning/application failure, prerequisite
+                         failure, careless error, time pressure, ...) and
+                         walks the full prerequisite chain on a failure
+                         rather than assuming the tested concept is the
+                         real gap (spec §26) — reusing Phase 4's recursive
+                         getPrerequisiteStatus()
+  exam-readiness.ts       ExamReadinessEngine: combines mastery, recent
+                         exam performance, consistency, prerequisite
+                         health, forgetting risk, and active
+                         misconceptions — reusing the Phase 6 adaptive
+                         engine's own scoring building blocks, never a
+                         second mastery model (spec §13, §40)
+  adaptive-exam.ts        per-question difficulty/concept selection for
+                         ADAPTIVE mode — reacts every question (unlike
+                         Active Recall's smoothed difficulty), and a wrong
+                         answer pivots to checking a blocked prerequisite
+                         via the adaptive engine's own findPrerequisiteBlock()
+  oral-exam.ts            examiner depth progression (definition -> ...
+                         -> expert reasoning) that adapts to performance
+                         rather than always reaching the deepest level
+  scenario-exam.ts        shapes a scenario's structured context
+                         (context/objective/constraints/available
+                         information) for both the UI and the grading
+                         prompt
+  exam-state.ts           server-computed remaining time / expiry — the
+                         client's own timer is display-only (spec §16)
+  exam-engine.ts          composable named steps: result aggregation
+                         (concept/cognitive scores, mistake summary),
+                         weak-concept identification, and the post-exam
+                         recommendation (spec §44 — never "study more":
+                         reuses getNextLearningAction(), since exam
+                         evidence is already recorded by the time this
+                         runs, refined by exam-specific mistake categories)
+  exam-orchestrator.ts    the full pipeline API routes call: create ->
+                         start -> answer (graded immediately, revealed
+                         only after submission) -> submit (idempotent,
+                         unanswered questions graded UNANSWERED) -> result
+```
+
+**Exam vs. learning mode** (spec §14): hints/reveal are off by default and,
+even when explicitly enabled, are never trusted from the client —
+`submitExamAnswer` zeroes out any claimed `hintsUsed`/`revealedAnswer` when
+the exam itself doesn't allow them. A hinted correct answer still reaches
+the Student Knowledge Model, just at reduced evidence weight; a revealed
+answer produces none of its own (mirrors Phase 7's hint/reveal principle).
+
+**Retest** (spec §46-47): `createRetest()` scopes a fresh, smaller exam to
+just the weak concepts, and question reuse excludes anything this specific
+user has already been asked — a different user's past question is still
+fair game (saves a Claude call), but the same student never sees a
+question they already saw.
+
+API surface:
+
+```
+GET  /api/courses/:id/exams              real exam history for this course
+POST /api/courses/:id/exams              create (blueprint + question generation)
+POST /api/courses/:id/exams/retest       targeted retest on given weak concepts
+GET  /api/courses/:id/readiness          ExamReadinessEngine output
+GET  /api/exams/:id                      resume state (server-computed remaining time)
+POST /api/exams/:id/start                CREATED -> ACTIVE, starts the server clock
+POST /api/exams/:id/answers              save + eagerly grade one answer (never revealed yet)
+POST /api/exams/:id/submit               finalize (idempotent), update the Student Knowledge Model
+GET  /api/exams/:id/result               post-exam analysis, once graded
+```
+
+UI: `/courses/:id/exam` — setup form, readiness card, and history;
+`/courses/:id/exam/:examId` — the exam itself (timer, question
+navigation, confidence selector, an "N unanswered" submit warning);
+`/courses/:id/exam/:examId/result` — score, concept/cognitive breakdowns,
+per-question review, and a one-click retest; `/courses/:id/exam/oral` — a
+simple text-based examiner chat (no speech-to-text provider is already
+wired into this project, so this is the text fallback the spec asks for).
+
+**Known limitation:** same as Phases 3/5/6/7 — no live `ANTHROPIC_API_KEY`
+in this sandbox. Unlike Phase 7's conversational generators, exam question
+generation deliberately has **no** deterministic fallback (a fabricated
+exam question would violate grounding, spec §9) — a generation failure is
+a first-class, cleanly-handled outcome: the just-created `Exam` row is
+deleted rather than left behind as a permanently-empty, un-resumable
+orphan (mirrors Phase 5's `getOrStartSession` fix for the same class of
+bug). Grading, mistake analysis, readiness, and the retest/recommendation
+loop all make zero or Claude-optional calls and were fully verified live
+against the running server and real Postgres, including readiness's real
+numbers and the orphan-cleanup behavior itself; only question
+generation/rubric grading need the missing key.
+
 ## Scripts
 
 | Script | Purpose |
@@ -499,15 +626,18 @@ running server and real Postgres using those fallback paths; only the
 ```
 src/
   app/
-    courses/                          Courses list, course/document/knowledge-graph/study/tutor pages
+    courses/                          Courses list, course/document/knowledge-graph/study/tutor/exam pages
     concepts/[id]/                    Concept detail page
     api/courses, api/documents/,
     api/concepts/, api/study-sessions/,
     api/mistakes/, api/goals/,
-    api/next-action/, api/tutor/       Route handlers (see API surfaces above)
+    api/next-action/, api/tutor/,
+    api/exams/                         Route handlers (see API surfaces above)
   components/courses, documents/,
-             knowledge/, study/, tutor/ Client components (upload, delete, forms, graph viz,
-                                        Active Recall session UI, adaptive dashboard, tutor chat)
+             knowledge/, study/, tutor/,
+             exam/                      Client components (upload, delete, forms, graph viz,
+                                        Active Recall session UI, adaptive dashboard, tutor chat,
+                                        exam runner/results/readiness/oral examiner)
   lib/
     ai/                Server-side Claude service (claude.ts), retry.ts, answer-evaluator.ts
       prompts/         Prompt templates + their Zod output schemas, kept out of components
@@ -521,6 +651,9 @@ src/
                          adaptive-engine.ts + adaptive/ (Phase 6 — deterministic decision engine)
     tutor/              tutor-engine.ts, tutor-decision.ts, tutor-orchestrator.ts + socratic.ts/
                          remediation.ts/teach-back.ts/hints.ts/misconceptions.ts (Phase 7)
+    exam/               exam-engine.ts, exam-orchestrator.ts, exam-blueprint.ts/-generator.ts/
+                         -grader.ts, mistake-analyzer.ts, exam-readiness.ts, adaptive-exam.ts/
+                         oral-exam.ts/scenario-exam.ts (Phase 8)
     services/          Ownership-checked course/document/knowledge/student-knowledge/
                         learning-goals business logic
     storage/           Storage abstraction (local FS now, S3-compatible later)

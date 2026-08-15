@@ -41,6 +41,8 @@ model User {
   adaptiveDecisionLogs  AdaptiveDecisionLog[]
   tutorSessions         TutorSession[]
   studentMisconceptions StudentMisconception[]
+  exams                 Exam[]
+  examAnswers           ExamAnswer[]
 
   @@map("users")
 }
@@ -81,6 +83,7 @@ model Course {
   learningGoals        LearningGoal[]
   adaptiveDecisionLogs AdaptiveDecisionLog[]
   tutorSessions        TutorSession[]
+  exams                Exam[]
 
   @@index([userId])
   @@map("courses")
@@ -189,6 +192,7 @@ model Concept {
   tutorSessions         TutorSession[]
   studentMisconceptions StudentMisconception[]
   tutorSessionOutcomes  TutorSessionOutcome[]
+  examQuestions         ExamQuestion[]
 
   // Prevents duplicate concepts within a course (spec §2, §11 dedup).
   @@unique([courseId, normalizedName])
@@ -388,6 +392,7 @@ model LearningAttempt {
   mistakes              StudentMistake[]
   answers               Answer[]
   studySessionQuestions StudySessionQuestion[]
+  examAnswers           ExamAnswer[]
 
   @@index([userId])
   @@index([conceptId])
@@ -921,6 +926,256 @@ model TutorSessionOutcome {
   concept Concept      @relation(fields: [conceptId], references: [id], onDelete: Cascade)
 
   @@map("tutor_session_outcomes")
+}
+
+// ---------------------------------------------------------------------------
+// Exam & assessment engine (Phase 8)
+//
+// An Exam is both the "ExamConfig" and "ExamSession" the spec describes
+// (spec §4, §17) — a real MVP has no reason to split configuration from
+// the session it configures, and each Exam row already doubles as its own
+// ExamAttempt history record (spec §48) once graded, so a separate
+// ExamAttempt model would just duplicate it. ExamQuestion is deliberately
+// its own model rather than reusing Question (Phase 5): exam questions
+// need a response-format axis (multiple choice options, correct option
+// ids for deterministic grading) that free-text Active Recall questions
+// don't have, but question GENERATION reuses the same Claude-calling
+// infrastructure (extractStructured/withRetry) and source-grounding
+// conventions as question-generator.ts (spec §7 — no separate pipeline).
+// Grading, mastery, prerequisite, and difficulty logic are never
+// reimplemented here — see exam-grader.ts / mistake-analyzer.ts /
+// exam-readiness.ts / adaptive-exam.ts for what's reused from Phases
+// 4/5/6 instead (spec §13, §55, §60).
+// ---------------------------------------------------------------------------
+
+enum ExamMode {
+  WRITTEN
+  ORAL
+  SCENARIO
+  ADAPTIVE
+}
+
+enum ExamStatus {
+  CREATED
+  ACTIVE
+  PAUSED
+  SUBMITTED
+  GRADED
+  EXPIRED
+  ABANDONED
+}
+
+/// FIXED uses `difficulty` for every question; ADAPTIVE lets adaptive-exam.ts adjust difficulty question-to-question (spec §12).
+enum ExamDifficultyMode {
+  FIXED
+  ADAPTIVE
+}
+
+model Exam {
+  id       String     @id @default(cuid())
+  userId   String
+  courseId String
+  mode     ExamMode
+  status   ExamStatus @default(CREATED)
+
+  difficultyMode   ExamDifficultyMode @default(FIXED)
+  /// Base/starting difficulty (1-5) — the only meaning for FIXED mode; the seed difficulty for ADAPTIVE mode.
+  difficulty       Int                @default(2)
+  questionCount    Int
+  timeLimitSeconds Int?
+  /// 0-1; a graded Exam is `passed` when ExamResult.percentage >= this (spec §4, §37).
+  passingScore     Float              @default(0.75)
+  allowHints       Boolean            @default(false)
+  allowSources     Boolean            @default(false)
+
+  /// Concept ids explicitly requested for this exam (e.g. a retest); null/empty means "the whole course" via the blueprint (spec §4, §46).
+  targetConceptIds Json?
+  /// The generated ExamBlueprint snapshot (concept weights, cognitive distribution) — kept for audit/UI, never recomputed differently after creation (spec §5-6).
+  blueprint        Json?
+  /// True for a RETEST_WEAK_AREAS exam (spec §46) — informs the UI and excludes it from certain readiness aggregates that expect full-coverage exams.
+  isRetest         Boolean @default(false)
+
+  currentQuestionIndex Int       @default(0)
+  startedAt            DateTime?
+  submittedAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  questions ExamQuestion[]
+  answers   ExamAnswer[]
+  result    ExamResult?
+
+  @@index([userId, courseId])
+  @@index([userId, status])
+  @@map("exams")
+}
+
+enum ExamQuestionType {
+  MULTIPLE_CHOICE
+  MULTI_SELECT
+  TRUE_FALSE
+  SHORT_ANSWER
+  OPEN_ENDED
+  PROBLEM_SOLVING
+  SCENARIO
+  TEACH_BACK
+}
+
+/// Bloom's-taxonomy-inspired cognitive dimension (spec §35-36) — independent of questionType (response format) and difficulty (1-5 hardness).
+enum CognitiveLevel {
+  RECALL
+  UNDERSTAND
+  APPLY
+  ANALYZE
+  EVALUATE
+}
+
+model ExamQuestion {
+  id        String @id @default(cuid())
+  examId    String
+  conceptId String
+
+  questionType   ExamQuestionType
+  cognitiveLevel CognitiveLevel
+  difficulty     Int              @default(2)
+  /// 1-based order within the exam.
+  position       Int
+
+  prompt                 String
+  /// MULTIPLE_CHOICE/MULTI_SELECT/TRUE_FALSE only: [{id, text}]. Never includes which option is correct — see correctOptionIds.
+  options                Json?
+  /// Option ids that grade as correct — never sent to the client while the exam is ACTIVE (spec §53).
+  correctOptionIds       Json?
+  /// Reference answer for SHORT_ANSWER/OPEN_ENDED/PROBLEM_SOLVING/SCENARIO/TEACH_BACK grading context — never shown before submission (spec §14, §63).
+  expectedAnswer         String?
+  /// AssessmentRubric criteria: [{criterion, weight, description}] (spec §22).
+  rubric                 Json?
+  /// Document chunk ids this question is grounded in (spec §9, §62).
+  sourceReferences       Json?
+  /// Direct prerequisite concept ids, snapshotted at generation time — used by mistake-analyzer.ts without re-querying the graph for display purposes (spec §8, §26).
+  prerequisiteConceptIds Json?
+  learningObjective      String?
+  points                 Float   @default(1)
+
+  /// SCENARIO only: context/objective/constraints/availableInformation (spec §32-33) — kept separate from `prompt` (the actual question) so the UI can render them distinctly.
+  scenario Json?
+
+  createdAt DateTime @default(now())
+
+  exam    Exam        @relation(fields: [examId], references: [id], onDelete: Cascade)
+  concept Concept     @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  answer  ExamAnswer?
+
+  @@index([examId])
+  @@index([conceptId])
+  @@map("exam_questions")
+}
+
+enum ExamAnswerClassification {
+  CORRECT
+  PARTIALLY_CORRECT
+  INCORRECT
+  MISCONCEPTION
+  UNANSWERED
+}
+
+/// Independent of StudentMistakeCategory (Phase 4) — an exam-specific taxonomy (spec §24) mapped down to the closest StudentMistakeCategory when persisted into StudentMistake via recordLearningOutcome, so exam mistakes still show up in the one cross-phase mistake history rather than a second, disconnected one.
+enum ExamMistakeCategory {
+  KNOWLEDGE_GAP
+  MISCONCEPTION
+  RECALL_FAILURE
+  REASONING_FAILURE
+  APPLICATION_FAILURE
+  PREREQUISITE_FAILURE
+  CARELESS_ERROR
+  INCOMPLETE_ANSWER
+  TIME_PRESSURE
+  UNKNOWN
+}
+
+/// Student self-report (spec §19) — illusion-of-competence detection (spec §22) is INCORRECT + CONFIDENT.
+enum ExamConfidenceLevel {
+  CONFIDENT
+  UNSURE
+  GUESSING
+}
+
+model ExamAnswer {
+  id         String @id @default(cuid())
+  examId     String
+  questionId String @unique
+  userId     String
+
+  /// SHORT_ANSWER/OPEN_ENDED/PROBLEM_SOLVING/SCENARIO/TEACH_BACK/ORAL free text.
+  answerText        String?
+  /// MULTIPLE_CHOICE/MULTI_SELECT/TRUE_FALSE selected option ids.
+  selectedOptionIds Json?
+  confidence        ExamConfidenceLevel?
+
+  timeSpentSeconds Int     @default(0)
+  hintsUsed        Int     @default(0)
+  revealedAnswer   Boolean @default(false)
+  /// ORAL only — the examiner depth this answer was given at (spec §30).
+  oralDepth        Int?
+
+  classification  ExamAnswerClassification?
+  /// 0-1 deterministic final score — for open-ended/scenario/oral this is calculated by the backend from criteriaScores, never trusted directly from Claude (spec §22-23).
+  score           Float?
+  /// Claude's per-criterion scores for open-ended/scenario/oral grading (spec §21-22) — informational/auditable, not the source of truth for `score`.
+  criteriaScores  Json?
+  feedback        String?
+  missingConcepts Json?
+  mistakeCategory ExamMistakeCategory?
+  mistakeSeverity MistakeSeverity?
+
+  /// Set once recordLearningOutcome() has run for this answer (spec §23, §64).
+  attemptId String?
+
+  submittedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  exam     Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question ExamQuestion     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attempt  LearningAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  @@index([examId])
+  @@index([userId])
+  @@map("exam_answers")
+}
+
+/// The graded aggregate for one Exam (spec §37-39) — written once, at submission. conceptScores/cognitiveScores/mistakeSummary come straight from the ExamAnswer rows, never invented.
+model ExamResult {
+  id     String @id @default(cuid())
+  examId String @unique
+
+  overallScore     Float
+  percentage       Float
+  passed           Boolean
+  totalQuestions   Int
+  correctAnswers   Int
+  partialAnswers   Int
+  incorrectAnswers Int
+  unanswered       Int
+  timeSpentSeconds Int
+
+  /// { [conceptId]: { name, score, questionCount } }
+  conceptScores   Json
+  /// { [cognitiveLevel]: score }
+  cognitiveScores Json
+  /// { totalMistakes, byCategory: {...}, prerequisiteGaps: [...] }
+  mistakeSummary  Json
+  /// Snapshot of ExamReadinessEngine's output computed right after this exam (spec §40-41) — not recomputed later.
+  readinessScore  Float?
+
+  gradedAt DateTime @default(now())
+
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@map("exam_results")
 }
 
 // ---------------------------------------------------------------------------
