@@ -1,0 +1,345 @@
+// AI Study Coach — Prisma schema
+// Phase 1: foundation models only (User, Course, Document, DocumentChunk).
+// Concept/Prerequisite/Mastery/Question/Answer/Mistake/Review/AiUsageLog are
+// defined now too since they're small and referenced by FK from Phase 1
+// models, but their business logic ships in later phases (see spec §30).
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ---------------------------------------------------------------------------
+// Core identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses          Course[]
+  masteries        StudentConceptMastery[]
+  answers          Answer[]
+  mistakes         Mistake[]
+  reviews          Review[]
+  aiUsageLogs      AiUsageLog[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Course ingestion
+// ---------------------------------------------------------------------------
+
+enum CourseStatus {
+  active
+  archived
+}
+
+model Course {
+  id          String       @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  status      CourseStatus @default(active)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents Document[]
+  concepts  Concept[]
+
+  @@index([userId])
+  @@map("courses")
+}
+
+enum DocumentType {
+  pdf
+  text
+  other
+}
+
+enum ProcessingStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+model Document {
+  id                String            @id @default(cuid())
+  courseId          String
+  filename          String
+  type              DocumentType
+  storagePath       String
+  extractedText     String?
+  processingStatus  ProcessingStatus  @default(pending)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  course Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  chunks DocumentChunk[]
+
+  @@index([courseId])
+  @@map("documents")
+}
+
+model DocumentChunk {
+  id         String                      @id @default(cuid())
+  documentId String
+  text       String
+  chunkIndex Int
+  embedding  Unsupported("vector(1536)")?
+  metadata   Json?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+  @@map("document_chunks")
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge graph
+// ---------------------------------------------------------------------------
+
+model Concept {
+  id               String   @id @default(cuid())
+  courseId         String
+  name             String
+  description      String?
+  difficulty       Int      @default(1)
+  sourceReferences Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  prerequisitesFor Prerequisite[] @relation("DependentConcept")
+  prerequisiteOf   Prerequisite[] @relation("PrerequisiteConcept")
+
+  masteries StudentConceptMastery[]
+  questions Question[]
+  mistakes  Mistake[]
+  reviews   Review[]
+
+  @@index([courseId])
+  @@map("concepts")
+}
+
+model Prerequisite {
+  id                     String @id @default(cuid())
+  prerequisiteConceptId  String
+  dependentConceptId     String
+  strength               Float  @default(1.0)
+  confidence             Float  @default(1.0)
+
+  prerequisiteConcept Concept @relation("PrerequisiteConcept", fields: [prerequisiteConceptId], references: [id], onDelete: Cascade)
+  dependentConcept    Concept @relation("DependentConcept", fields: [dependentConceptId], references: [id], onDelete: Cascade)
+
+  @@unique([prerequisiteConceptId, dependentConceptId])
+  @@index([dependentConceptId])
+  @@map("prerequisites")
+}
+
+// ---------------------------------------------------------------------------
+// Student model
+// ---------------------------------------------------------------------------
+
+enum MasteryStatus {
+  unknown
+  learning
+  developing
+  mastered
+  needs_remediation
+}
+
+model StudentConceptMastery {
+  id                String        @id @default(cuid())
+  userId            String
+  conceptId         String
+
+  recallScore       Float         @default(0)
+  explanationScore  Float         @default(0)
+  applicationScore  Float         @default(0)
+  transferScore     Float         @default(0)
+  confidenceScore   Float         @default(0)
+  overallMastery    Float         @default(0)
+
+  exposureCount     Int           @default(0)
+  successCount      Int           @default(0)
+  failureCount      Int           @default(0)
+
+  lastReviewedAt    DateTime?
+  nextReviewAt      DateTime?
+
+  status            MasteryStatus @default(unknown)
+
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, conceptId])
+  @@index([userId])
+  @@index([conceptId])
+  @@map("student_concept_mastery")
+}
+
+// ---------------------------------------------------------------------------
+// Questions & answers
+// ---------------------------------------------------------------------------
+
+enum QuestionType {
+  recall
+  explain
+  compare
+  apply
+  scenario
+  troubleshooting
+  teach_back
+  oral
+  written_exam
+  transfer
+}
+
+model Question {
+  id               String       @id @default(cuid())
+  conceptId        String
+  type             QuestionType
+  difficulty       Int          @default(1)
+  prompt           String
+  expectedAnswer   String?
+  rubric           Json?
+  sourceReferences Json?
+  createdAt        DateTime     @default(now())
+
+  concept Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  answers Answer[]
+
+  @@index([conceptId])
+  @@map("questions")
+}
+
+model Answer {
+  id                     String   @id @default(cuid())
+  questionId             String
+  userId                 String
+  answerText             String
+  score                  Float?
+  correctness            Float?
+  reasoningQuality       Float?
+  completeness           Float?
+  confidence             Float?
+  feedback               String?
+  detectedMisconceptions Json?
+  missingConcepts        Json?
+  createdAt              DateTime @default(now())
+
+  question Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mistakes Mistake[]
+
+  @@index([questionId])
+  @@index([userId])
+  @@map("answers")
+}
+
+// ---------------------------------------------------------------------------
+// Mistakes
+// ---------------------------------------------------------------------------
+
+enum MistakeCategory {
+  factual_error
+  conceptual_gap
+  misconception
+  prerequisite_gap
+  reasoning_error
+  incomplete_answer
+  application_failure
+  transfer_failure
+  terminology_confusion
+  careless_error
+}
+
+model Mistake {
+  id          String          @id @default(cuid())
+  userId      String
+  conceptId   String
+  answerId    String?
+  category    MistakeCategory
+  description String
+  severity    Int             @default(1)
+  resolved    Boolean         @default(false)
+  resolvedAt  DateTime?
+  createdAt   DateTime        @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  answer  Answer? @relation(fields: [answerId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([conceptId])
+  @@map("mistakes")
+}
+
+// ---------------------------------------------------------------------------
+// Spaced repetition
+// ---------------------------------------------------------------------------
+
+enum ReviewOutcome {
+  again
+  hard
+  good
+  easy
+}
+
+model Review {
+  id           String         @id @default(cuid())
+  userId       String
+  conceptId    String
+  scheduledAt  DateTime
+  completedAt  DateTime?
+  outcome      ReviewOutcome?
+  interval     Float          @default(0)
+  ease         Float          @default(2.5)
+  repetitions  Int            @default(0)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@index([userId, scheduledAt])
+  @@index([conceptId])
+  @@map("reviews")
+}
+
+// ---------------------------------------------------------------------------
+// Cost control / observability
+// ---------------------------------------------------------------------------
+
+model AiUsageLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  model           String
+  inputTokens     Int
+  outputTokens    Int
+  estimatedCostUsd Float
+  requestType     String
+  createdAt       DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("ai_usage_logs")
+}
