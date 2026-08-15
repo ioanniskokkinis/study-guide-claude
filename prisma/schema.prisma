@@ -1,8 +1,10 @@
 // AI Study Coach — Prisma schema
-// Phase 1: foundation models only (User, Course, Document, DocumentChunk).
-// Concept/Prerequisite/Mastery/Question/Answer/Mistake/Review/AiUsageLog are
-// defined now too since they're small and referenced by FK from Phase 1
-// models, but their business logic ships in later phases (see spec §30).
+// Phase 1: foundation (User, Course, Document, DocumentChunk).
+// Phase 2: document ingestion fields on Document/DocumentChunk.
+// Phase 3: knowledge graph (Concept, ConceptSource, ConceptRelationship,
+// Course.knowledgeStatus). Mastery/Question/Answer/Mistake/Review/AiUsageLog
+// are defined for their FKs but their business logic ships in later phases
+// (see spec §30).
 
 generator client {
   provider        = "prisma-client"
@@ -45,14 +47,24 @@ enum CourseStatus {
   archived
 }
 
+enum KnowledgeStatus {
+  NOT_STARTED
+  PROCESSING
+  READY
+  FAILED
+}
+
 model Course {
-  id          String       @id @default(cuid())
-  userId      String
-  title       String
-  description String?
-  status      CourseStatus @default(active)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id               String          @id @default(cuid())
+  userId           String
+  title            String
+  description      String?
+  status           CourseStatus    @default(active)
+  knowledgeStatus  KnowledgeStatus @default(NOT_STARTED)
+  knowledgeError   String?
+  knowledgeBuiltAt DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   documents Document[]
@@ -108,7 +120,8 @@ model DocumentChunk {
   metadata   Json?
   createdAt  DateTime                     @default(now())
 
-  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document       Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  conceptSources ConceptSource[]
 
   @@unique([documentId, chunkIndex])
   @@index([documentId])
@@ -117,45 +130,104 @@ model DocumentChunk {
 
 // ---------------------------------------------------------------------------
 // Knowledge graph
+//
+// This is the COURSE's knowledge graph — what the material teaches — not the
+// student's knowledge state (that's StudentConceptMastery, Phase 4). Do not
+// add mastery fields here.
+//
+// Phase 1 sketched a dedicated `Prerequisite` table alongside `Concept`. This
+// schema consolidates prerequisite edges into `ConceptRelationship` instead
+// (relationshipType = "prerequisite") rather than keeping both: Phase 3's own
+// spec defines relationshipType as an 8-value enum that includes
+// "prerequisite", and maintaining two parallel representations of the same
+// edge would mean keeping them in sync on every rebuild — a real risk to the
+// idempotency guarantee (rerun-safe, no duplicates) required by this phase.
+// A single evidence-backed, confidence-scored table is the simpler design.
+//
+// Direction convention for relationshipType = "prerequisite":
+//   sourceConcept -> targetConcept means "sourceConcept is a prerequisite
+//   for targetConcept" (source must be learned first; source is required to
+//   understand target). Read services/knowledge.ts's getPrerequisitesOf() /
+//   getDependentsOf() rather than reasoning about source/target directly.
 // ---------------------------------------------------------------------------
 
 model Concept {
-  id               String   @id @default(cuid())
-  courseId         String
-  name             String
-  description      String?
-  difficulty       Int      @default(1)
-  sourceReferences Json?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id             String   @id @default(cuid())
+  courseId       String
+  name           String
+  normalizedName String
+  description    String?
+  difficulty     Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  prerequisitesFor Prerequisite[] @relation("DependentConcept")
-  prerequisiteOf   Prerequisite[] @relation("PrerequisiteConcept")
+  sources               ConceptSource[]
+  relationshipsAsSource ConceptRelationship[] @relation("RelationshipSource")
+  relationshipsAsTarget ConceptRelationship[] @relation("RelationshipTarget")
 
   masteries StudentConceptMastery[]
   questions Question[]
   mistakes  Mistake[]
   reviews   Review[]
 
+  // Prevents duplicate concepts within a course (spec §2, §11 dedup).
+  @@unique([courseId, normalizedName])
   @@index([courseId])
   @@map("concepts")
 }
 
-model Prerequisite {
-  id                    String @id @default(cuid())
-  prerequisiteConceptId String
-  dependentConceptId    String
-  strength              Float  @default(1.0)
-  confidence            Float  @default(1.0)
+/// Links a concept to the document chunk(s) it was extracted from, so every
+/// concept is traceable back to its source material (spec §3).
+model ConceptSource {
+  id              String   @id @default(cuid())
+  conceptId       String
+  documentChunkId String
+  relevance       Float    @default(1.0)
+  evidence        String
+  createdAt       DateTime @default(now())
 
-  prerequisiteConcept Concept @relation("PrerequisiteConcept", fields: [prerequisiteConceptId], references: [id], onDelete: Cascade)
-  dependentConcept    Concept @relation("DependentConcept", fields: [dependentConceptId], references: [id], onDelete: Cascade)
+  concept       Concept       @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  documentChunk DocumentChunk @relation(fields: [documentChunkId], references: [id], onDelete: Cascade)
 
-  @@unique([prerequisiteConceptId, dependentConceptId])
-  @@index([dependentConceptId])
-  @@map("prerequisites")
+  @@unique([conceptId, documentChunkId])
+  @@index([conceptId])
+  @@index([documentChunkId])
+  @@map("concept_sources")
+}
+
+enum RelationshipType {
+  prerequisite
+  contains
+  related
+  example_of
+  contrasts_with
+  causes
+  part_of
+  applies_to
+}
+
+model ConceptRelationship {
+  id               String           @id @default(cuid())
+  sourceConceptId  String
+  targetConceptId  String
+  relationshipType RelationshipType
+  confidence       Float
+  evidence         String
+  /// Accepted (confidence in the "review" band) but not fully auto-trusted — see spec §15.
+  needsReview      Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+
+  sourceConcept Concept @relation("RelationshipSource", fields: [sourceConceptId], references: [id], onDelete: Cascade)
+  targetConcept Concept @relation("RelationshipTarget", fields: [targetConceptId], references: [id], onDelete: Cascade)
+
+  // Prevents duplicate edges of the same type between the same pair (idempotent rebuilds).
+  @@unique([sourceConceptId, targetConceptId, relationshipType])
+  @@index([sourceConceptId])
+  @@index([targetConceptId])
+  @@index([relationshipType])
+  @@map("concept_relationships")
 }
 
 // ---------------------------------------------------------------------------

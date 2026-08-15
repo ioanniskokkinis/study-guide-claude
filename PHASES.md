@@ -12,8 +12,13 @@ each phase depends on the previous one's persisted data model.
       paragraph-aware chunking (no LLM calls, no embeddings yet), a
       synchronous upload→extract→chunk→ready/failed pipeline, and courses
       / course-detail / document-detail pages.
-- [ ] **Phase 3 — Knowledge graph.** Concept extraction, prerequisite
-      extraction, concept graph, concept pages.
+- [x] **Phase 3 — Knowledge graph.** Real Claude API integration (structured
+      JSON extraction via `messages.parse` + `zodOutputFormat`): batched
+      concept extraction, deterministic + AI-assisted deduplication,
+      relationship/prerequisite extraction with confidence gating and
+      cycle-safe DAG validation, an idempotent course-level rebuild, source
+      traceability, and a knowledge graph UI (search, filters, lightweight
+      SVG visualization, concept detail with inspectable evidence).
 - [ ] **Phase 4 — Student model.** Mastery, attempts, mistakes, confidence,
       history.
 - [ ] **Phase 5 — Active recall.** Question generation, answer submission,
