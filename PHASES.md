@@ -19,8 +19,15 @@ each phase depends on the previous one's persisted data model.
       cycle-safe DAG validation, an idempotent course-level rebuild, source
       traceability, and a knowledge graph UI (search, filters, lightweight
       SVG visualization, concept detail with inspectable evidence).
-- [ ] **Phase 4 — Student model.** Mastery, attempts, mistakes, confidence,
-      history.
+- [x] **Phase 4 — Student model.** Persistent, multidimensional mastery
+      (recall/explanation/application/transfer/confidence, never a boolean),
+      deterministic weighted-evidence mastery engine with recency
+      weighting, full learning-attempt/evidence/mistake history (never
+      overwritten), misconception vs. knowledge-gap distinction, confidence
+      calibration, prerequisite-aware mastery queries with cycle-safe
+      recursion, a course/concept "My Knowledge" UI clearly separated from
+      Phase 3's course knowledge, and `recordLearningOutcome()` as the
+      single atomic entry point later phases will reuse.
 - [ ] **Phase 5 — Active recall.** Question generation, answer submission,
       evaluation, mastery update, next-question selection.
 - [ ] **Phase 6 — Adaptive engine.** Difficulty adjustment, prerequisite

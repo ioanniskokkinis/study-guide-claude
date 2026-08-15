@@ -2,10 +2,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { getCourseWithDocuments } from "@/lib/services/courses";
+import { getCourseMastery } from "@/lib/services/student-knowledge";
 import { UploadPdfForm } from "@/components/documents/UploadPdfForm";
 import { DeleteCourseButton } from "@/components/courses/DeleteCourseButton";
 import { DeleteDocumentButton } from "@/components/documents/DeleteDocumentButton";
+import { MyKnowledgeSummaryCard } from "@/components/knowledge/MyKnowledgeSummaryCard";
 import { statusLabel } from "@/components/documents/status-label";
+
+export const dynamic = "force-dynamic";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -14,7 +18,10 @@ interface PageProps {
 export default async function CoursePage({ params }: PageProps) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const course = await getCourseWithDocuments(user.id, id);
+  const [course, mastery] = await Promise.all([
+    getCourseWithDocuments(user.id, id),
+    getCourseMastery(user.id, id),
+  ]);
 
   if (!course) {
     notFound();
@@ -46,6 +53,12 @@ export default async function CoursePage({ params }: PageProps) {
           Knowledge Graph
         </Link>
       </div>
+
+      {mastery && (
+        <div className="mt-8">
+          <MyKnowledgeSummaryCard courseId={course.id} mastery={mastery} />
+        </div>
+      )}
 
       <h2 className="mt-8 text-sm font-medium text-zinc-500">Documents</h2>
       {course.documents.length === 0 ? (

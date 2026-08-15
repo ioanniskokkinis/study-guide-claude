@@ -3,6 +3,13 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { getConceptDetail } from "@/lib/services/knowledge";
+import {
+  getConceptEvidence,
+  getConceptMistakes,
+  getMastery,
+  getPrerequisiteStatus,
+} from "@/lib/services/student-knowledge";
+import { ConceptMyKnowledge } from "@/components/knowledge/ConceptMyKnowledge";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +66,13 @@ export default async function ConceptDetailPage({ params }: PageProps) {
     notFound();
   }
 
+  const [mastery, prerequisiteStatus, evidence, mistakes] = await Promise.all([
+    getMastery(user.id, id),
+    getPrerequisiteStatus(user.id, id),
+    getConceptEvidence(user.id, id),
+    getConceptMistakes(user.id, id),
+  ]);
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
       <Link href={`/courses/${concept.course.id}/knowledge`} className="text-sm text-zinc-500 hover:underline">
@@ -67,6 +81,17 @@ export default async function ConceptDetailPage({ params }: PageProps) {
       <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
         {concept.name}
       </h1>
+
+      {mastery && (
+        <ConceptMyKnowledge
+          mastery={mastery}
+          prerequisiteStatus={prerequisiteStatus}
+          evidence={evidence ?? []}
+          mistakes={mistakes ?? []}
+        />
+      )}
+
+      <h2 className="mt-10 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Course Knowledge</h2>
       <p className="mt-1 text-sm text-zinc-500">Difficulty {concept.difficulty}/5</p>
       {concept.description && <p className="mt-3 text-zinc-700 dark:text-zinc-300">{concept.description}</p>}
 

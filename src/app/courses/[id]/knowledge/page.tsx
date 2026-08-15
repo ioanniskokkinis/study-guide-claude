@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { getGraphData, getKnowledgeSummary, searchConcepts } from "@/lib/services/knowledge";
+import { getDevelopingConcepts, getKnowledgeSnapshot, getRecentMistakes } from "@/lib/services/student-knowledge";
 import { BuildKnowledgeGraphButton } from "@/components/knowledge/BuildKnowledgeGraphButton";
 import { ConceptGraph } from "@/components/knowledge/ConceptGraph";
+import { MyKnowledgeSection } from "@/components/knowledge/MyKnowledgeSection";
 import { knowledgeStatusLabel } from "@/components/knowledge/status-label";
 
 export const dynamic = "force-dynamic";
@@ -37,9 +39,12 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
 
   const activeFilter = type && FILTERS.some((f) => f.value === type) ? type : "all";
 
-  const [conceptResult, graph] = await Promise.all([
+  const [conceptResult, graph, knowledgeSnapshot, developingConcepts, mistakes] = await Promise.all([
     searchConcepts(user.id, courseId, { query: q, page: page ? Number(page) : 1 }),
     getGraphData(user.id, courseId, activeFilter === "all" ? undefined : [activeFilter]),
+    getKnowledgeSnapshot(user.id, courseId),
+    getDevelopingConcepts(user.id, courseId),
+    getRecentMistakes(user.id, courseId),
   ]);
 
   const status = knowledgeStatusLabel(summary.knowledgeStatus);
@@ -80,6 +85,14 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
           <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{summary.prerequisiteCount}</dd>
         </div>
       </dl>
+
+      {knowledgeSnapshot && (
+        <MyKnowledgeSection
+          snapshot={knowledgeSnapshot}
+          developingConcepts={developingConcepts ?? []}
+          mistakes={mistakes ?? []}
+        />
+      )}
 
       <div className="mt-8">
         <h2 className="text-sm font-medium text-zinc-500">Graph</h2>

@@ -28,12 +28,14 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses     Course[]
-  masteries   StudentConceptMastery[]
-  answers     Answer[]
-  mistakes    Mistake[]
-  reviews     Review[]
-  aiUsageLogs AiUsageLog[]
+  courses           Course[]
+  masteries         StudentConceptMastery[]
+  answers           Answer[]
+  studentMistakes   StudentMistake[]
+  reviews           Review[]
+  aiUsageLogs       AiUsageLog[]
+  learningAttempts  LearningAttempt[]
+  knowledgeEvidence KnowledgeEvidence[]
 
   @@map("users")
 }
@@ -167,10 +169,12 @@ model Concept {
   relationshipsAsSource ConceptRelationship[] @relation("RelationshipSource")
   relationshipsAsTarget ConceptRelationship[] @relation("RelationshipTarget")
 
-  masteries StudentConceptMastery[]
-  questions Question[]
-  mistakes  Mistake[]
-  reviews   Review[]
+  masteries         StudentConceptMastery[]
+  questions         Question[]
+  studentMistakes   StudentMistake[]
+  reviews           Review[]
+  learningAttempts  LearningAttempt[]
+  knowledgeEvidence KnowledgeEvidence[]
 
   // Prevents duplicate concepts within a course (spec §2, §11 dedup).
   @@unique([courseId, normalizedName])
@@ -231,15 +235,26 @@ model ConceptRelationship {
 }
 
 // ---------------------------------------------------------------------------
-// Student model
+// Student model (Phase 4)
+//
+// Strictly separate from the course knowledge graph above: Concept /
+// ConceptSource / ConceptRelationship describe what the material teaches,
+// never what a student knows. Everything in this section is scoped to a
+// (userId, conceptId) pair and answers "what does THIS student know."
+//
+// StudentConceptMastery rows are created lazily — on first evidence, not
+// pre-populated for every concept. Absence of a row means UNKNOWN ("not
+// enough evidence yet"), not "student doesn't know this." See
+// src/lib/learning/mastery-engine.ts.
 // ---------------------------------------------------------------------------
 
 enum MasteryStatus {
-  unknown
-  learning
-  developing
-  mastered
-  needs_remediation
+  UNKNOWN
+  LEARNING
+  DEVELOPING
+  STRONG
+  MASTERED
+  NEEDS_REMEDIATION
 }
 
 model StudentConceptMastery {
@@ -247,6 +262,7 @@ model StudentConceptMastery {
   userId    String
   conceptId String
 
+  // Dimensional scores (0-1), never a single boolean mastered flag (spec §1).
   recallScore      Float @default(0)
   explanationScore Float @default(0)
   applicationScore Float @default(0)
@@ -255,13 +271,16 @@ model StudentConceptMastery {
   overallMastery   Float @default(0)
 
   exposureCount Int @default(0)
+  attemptCount  Int @default(0)
   successCount  Int @default(0)
   failureCount  Int @default(0)
+  hintCount     Int @default(0)
+  revealCount   Int @default(0)
 
-  lastReviewedAt DateTime?
-  nextReviewAt   DateTime?
-
-  status MasteryStatus @default(unknown)
+  status        MasteryStatus @default(UNKNOWN)
+  lastAttemptAt DateTime?
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -269,10 +288,95 @@ model StudentConceptMastery {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
 
+  // One mastery row per student per concept (lazily created).
   @@unique([userId, conceptId])
   @@index([userId])
   @@index([conceptId])
+  @@index([status])
   @@map("student_concept_mastery")
+}
+
+enum EvidenceSourceType {
+  QUESTION
+  TEACH_BACK
+  SCENARIO
+  EXAM
+  DIAGNOSTIC
+  MANUAL
+}
+
+enum EvidenceOutcome {
+  SUCCESS
+  PARTIAL
+  FAILURE
+}
+
+/// A single, immutable, timestamped observation of a student's knowledge of
+/// a concept — the raw signal that feeds mastery updates. Never overwritten
+/// or deleted (spec §24); the ordered history of `score` values over time is
+/// also what backs the "mastery over time" view (spec §22) — no separate
+/// history table needed.
+model KnowledgeEvidence {
+  id         String             @id @default(cuid())
+  userId     String
+  conceptId  String
+  sourceType EvidenceSourceType
+  /// Polymorphic reference (e.g. a LearningAttempt id) — intentionally not a
+  /// strict FK, since evidence can originate from sources this phase doesn't
+  /// define yet (spec §31) or be MANUAL with no source at all.
+  sourceId   String?
+  outcome    EvidenceOutcome
+  score      Float
+  confidence Float?
+  notes      String?
+  createdAt  DateTime           @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([conceptId])
+  @@index([createdAt])
+  @@map("knowledge_evidence")
+}
+
+enum LearningActivityType {
+  RECALL
+  EXPLANATION
+  APPLICATION
+  TRANSFER
+  TEACH_BACK
+  SCENARIO
+  EXAM
+  DIAGNOSTIC
+}
+
+/// Full history of every learning interaction a student had with a concept.
+/// Never overwritten (spec §5) — this is the append-only log that
+/// KnowledgeEvidence and StudentMistake rows are derived from.
+model LearningAttempt {
+  id              String               @id @default(cuid())
+  userId          String
+  conceptId       String
+  activityType    LearningActivityType
+  difficulty      Int                  @default(1)
+  score           Float?
+  correctness     Float?
+  confidence      Float?
+  usedHint        Boolean              @default(false)
+  revealedAnswer  Boolean              @default(false)
+  durationSeconds Int?
+  createdAt       DateTime             @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  mistakes StudentMistake[]
+
+  @@index([userId])
+  @@index([conceptId])
+  @@index([createdAt])
+  @@map("learning_attempts")
 }
 
 // ---------------------------------------------------------------------------
@@ -325,9 +429,8 @@ model Answer {
   missingConcepts        Json?
   createdAt              DateTime @default(now())
 
-  question Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  mistakes Mistake[]
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([questionId])
   @@index([userId])
@@ -336,40 +439,57 @@ model Answer {
 
 // ---------------------------------------------------------------------------
 // Mistakes
+//
+// Critical distinction (spec §7): a knowledge GAP ("I don't know X") needs
+// teaching; a MISCONCEPTION ("I know X, incorrectly") needs confrontation
+// with a counterexample. `category` keeps them distinguishable — never
+// collapse both into a single "wrong answer" bucket.
 // ---------------------------------------------------------------------------
 
-enum MistakeCategory {
-  factual_error
-  conceptual_gap
-  misconception
-  prerequisite_gap
-  reasoning_error
-  incomplete_answer
-  application_failure
-  transfer_failure
-  terminology_confusion
-  careless_error
+enum StudentMistakeCategory {
+  FACTUAL_ERROR
+  CONCEPTUAL_GAP
+  MISCONCEPTION
+  PREREQUISITE_GAP
+  REASONING_ERROR
+  INCOMPLETE_ANSWER
+  APPLICATION_FAILURE
+  TRANSFER_FAILURE
+  TERMINOLOGY_CONFUSION
+  CARELESS_ERROR
 }
 
-model Mistake {
-  id          String          @id @default(cuid())
+enum MistakeSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Resolution is a review-tracking flag only — marking a mistake resolved
+/// must NOT itself change mastery (spec §23); mastery only moves on new
+/// evidence. Rows are never deleted, even once resolved (spec §24).
+model StudentMistake {
+  id          String                 @id @default(cuid())
   userId      String
   conceptId   String
-  answerId    String?
-  category    MistakeCategory
+  attemptId   String?
+  category    StudentMistakeCategory
   description String
-  severity    Int             @default(1)
-  resolved    Boolean         @default(false)
+  severity    MistakeSeverity        @default(MEDIUM)
+  resolved    Boolean                @default(false)
   resolvedAt  DateTime?
-  createdAt   DateTime        @default(now())
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
-  answer  Answer? @relation(fields: [answerId], references: [id], onDelete: SetNull)
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept Concept          @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  attempt LearningAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([conceptId])
-  @@map("mistakes")
+  @@index([resolved])
+  @@map("student_mistakes")
 }
 
 // ---------------------------------------------------------------------------

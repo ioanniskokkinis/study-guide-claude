@@ -4,10 +4,10 @@ An adaptive AI tutor that builds a persistent model of what a student knows,
 diagnoses gaps, and chooses the next best learning action — not a chatbot
 with PDFs attached.
 
-This repo is built in phases (see `PHASES.md` for status). **Phases 1–3
-(foundation, course ingestion, knowledge graph) are complete**; the
-adaptive study modes described in the full product spec ship in later
-phases.
+This repo is built in phases (see `PHASES.md` for status). **Phases 1–4
+(foundation, course ingestion, knowledge graph, student knowledge model)
+are complete**; the adaptive study modes described in the full product
+spec ship in later phases.
 
 ## Stack
 
@@ -156,6 +156,75 @@ detail, ownership checks) exercised against real seeded data, and the
 build-trigger's failure path (missing key → `FAILED` status with a clear
 error, no crash) verified live.
 
+## Student knowledge model (Phase 4)
+
+Strictly separate from Phase 3's course knowledge graph: `Concept` /
+`ConceptRelationship` describe what the material teaches; everything below
+describes what a specific student knows, scoped to `(userId, conceptId)`.
+Never a boolean — every concept tracks four independent dimensions
+(recall/explanation/application/transfer) plus a separately-stored
+confidence score, and a `StudentConceptMastery` row is only created lazily,
+on first evidence. **Absence of a row means `UNKNOWN` ("not enough evidence
+yet"), never "doesn't know it."**
+
+```
+LearningAttempt (full history, never overwritten)
+  → KnowledgeEvidence (one outcome-scored observation)
+  → StudentMistake[] (only if the attempt revealed one — category
+    distinguishes a knowledge GAP, "doesn't know yet," from a
+    MISCONCEPTION, "confidently knows it wrong")
+  → StudentConceptMastery update (deterministic, never AI-driven)
+```
+
+`src/lib/learning/record-outcome.ts#recordLearningOutcome()` is the single
+entry point that does all four atomically — this is what Phase 5's
+question/answer/evaluation loop will call. Mastery itself comes from
+`src/lib/learning/mastery-engine.ts`: a swappable `MasteryStrategy`
+(`WeightedEvidenceStrategy` is the only implementation so far) computes
+`newScore = oldScore * (1 - w) + newEvidence * w` per dimension — an EMA,
+so recent evidence always outweighs any single older data point without
+needing a separate history table for "current" mastery. Status
+(`UNKNOWN → LEARNING/DEVELOPING → STRONG → MASTERED`, or
+`NEEDS_REMEDIATION`) requires both a score threshold *and* a minimum
+attempt/success count — one lucky or unlucky answer never flips it.
+`src/lib/learning/confidence-calibrator.ts` compares self-reported
+confidence against correctness to flag "confidently wrong" (misconception
+signal) vs. "unsure but correct" (fragile knowledge) — not full statistics,
+just spec-scoped arithmetic.
+
+Read side (`src/lib/services/student-knowledge.ts`) is ownership-checked
+like every other service and includes `getPrerequisiteStatus()` — a
+recursive, cycle-safe (per-path visited set, diamond-shaped DAGs still
+resolve correctly) walk of a concept's prerequisite chain paired with this
+student's mastery of each link, and `getKnowledgeSnapshot()`, the
+aggregate `{overallMastery, strong/weak/unknownConcepts, misconceptions,
+prerequisiteGaps, recentFailures, calibration}` view meant as input for a
+future adaptive engine (Phase 6+), not a UI-specific payload.
+
+API surface:
+
+```
+GET   /api/concepts/:id/mastery                    mastery + prerequisite chain for one concept
+GET   /api/concepts/:id/evidence                    evidence history for one concept
+GET   /api/courses/:id/student-knowledge            aggregate knowledge snapshot
+GET   /api/courses/:id/student-knowledge/mistakes   mistake list (?unresolvedOnly=true)
+PATCH /api/mistakes/:id                              mark a mistake reviewed (never touches mastery)
+```
+
+UI: the course dashboard and `/courses/:id/knowledge` both show a "My
+Knowledge" section (overall mastery %, Strong/Developing/Weak/Unknown
+buckets, prerequisite-gap callouts, a resolvable mistake list); `/concepts/:id`
+splits into a visually distinct "Course Knowledge" section (unchanged from
+Phase 3) and a "My Knowledge" section (dimension breakdown, confidence,
+attempts, recent evidence, mistakes).
+
+**Known limitation:** there's no UI yet to generate learning attempts
+(Active Recall / Socratic / exams all ship in later phases), so Phase 4 was
+verified with real-Postgres integration tests plus a manual pass that
+drove `recordLearningOutcome()` directly against the running server and
+confirmed the resulting mastery, prerequisite-gap detection, and UI
+rendering against real (not hardcoded) data.
+
 ## Scripts
 
 | Script | Purpose |
@@ -188,7 +257,9 @@ src/
     documents/          pdf-extractor.ts, chunker.ts, document-processor.ts, validation.ts
     knowledge/          concept-extractor/normalizer, relationship/prerequisite extractors,
                          graph-validator, graph-layout, persist.ts, knowledge-builder.ts
-    services/          Ownership-checked course/document/knowledge business logic
+    learning/           mastery-engine.ts, confidence-calibrator.ts, record-outcome.ts —
+                         deterministic student mastery calculation (Phase 4)
+    services/          Ownership-checked course/document/knowledge/student-knowledge business logic
     storage/           Storage abstraction (local FS now, S3-compatible later)
     env.ts             Validated environment configuration
   generated/prisma/    Generated Prisma client (gitignored)
