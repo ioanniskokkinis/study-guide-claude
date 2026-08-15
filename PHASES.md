@@ -28,8 +28,14 @@ each phase depends on the previous one's persisted data model.
       recursion, a course/concept "My Knowledge" UI clearly separated from
       Phase 3's course knowledge, and `recordLearningOutcome()` as the
       single atomic entry point later phases will reuse.
-- [ ] **Phase 5 — Active recall.** Question generation, answer submission,
-      evaluation, mastery update, next-question selection.
+- [x] **Phase 5 — Active recall.** The first end-to-end learning loop:
+      grounded question generation (reuse-before-generate, duplicate
+      detection), free-text answer submission, Claude-based evaluation
+      (CORRECT/PARTIAL/INCORRECT, misconception vs. knowledge-gap
+      detection, graph-validated prerequisite-gap flagging), deterministic
+      `recordLearningOutcome()` mastery updates, basic adaptive difficulty,
+      prerequisite-aware next-question selection, hints, reveal-answer,
+      and a session UI with progress/summary.
 - [ ] **Phase 6 — Adaptive engine.** Difficulty adjustment, prerequisite
       remediation, weak-concept prioritization, "What should I study now?".
 - [ ] **Phase 7 — Socratic + teach-back.**

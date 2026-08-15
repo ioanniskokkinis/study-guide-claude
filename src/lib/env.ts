@@ -10,6 +10,13 @@ const envSchema = z.object({
   DOCUMENT_CHUNK_SIZE: z.coerce.number().int().positive().default(1200),
   DOCUMENT_CHUNK_OVERLAP: z.coerce.number().int().nonnegative().default(150),
   DEV_USER_EMAIL: z.string().email().default("dev@studycoach.local"),
+  // Which model *tier* (see src/lib/ai/claude.ts's "fast"/"default") each
+  // Phase 5 AI task uses — keeps task->model mapping configurable without
+  // duplicating actual model IDs (those stay in ANTHROPIC_MODEL_FAST/DEFAULT).
+  AI_MODEL_QUESTION_GENERATION: z.enum(["fast", "default"]).default("fast"),
+  AI_MODEL_ANSWER_EVALUATION: z.enum(["fast", "default"]).default("default"),
+  AI_MODEL_HINT_GENERATION: z.enum(["fast", "default"]).default("fast"),
+  DEFAULT_RECALL_SESSION_LENGTH: z.coerce.number().int().positive().default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;

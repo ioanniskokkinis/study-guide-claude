@@ -36,6 +36,7 @@ model User {
   aiUsageLogs       AiUsageLog[]
   learningAttempts  LearningAttempt[]
   knowledgeEvidence KnowledgeEvidence[]
+  studySessions     StudySession[]
 
   @@map("users")
 }
@@ -68,9 +69,11 @@ model Course {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents Document[]
-  concepts  Concept[]
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents     Document[]
+  concepts      Concept[]
+  questions     Question[]
+  studySessions StudySession[]
 
   @@index([userId])
   @@map("courses")
@@ -371,7 +374,9 @@ model LearningAttempt {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
 
-  mistakes StudentMistake[]
+  mistakes              StudentMistake[]
+  answers               Answer[]
+  studySessionQuestions StudySessionQuestion[]
 
   @@index([userId])
   @@index([conceptId])
@@ -380,61 +385,185 @@ model LearningAttempt {
 }
 
 // ---------------------------------------------------------------------------
-// Questions & answers
+// Questions & answers (Phase 5)
+//
+// A Question is course content (grounded in real source chunks, reusable
+// across students/sessions) — like Concept, it belongs to course knowledge,
+// not to any one student. An Answer is one student's attempt at one
+// Question, holding both the raw submission and (once evaluation succeeds)
+// the AI evaluator's structured result. Answer is deliberately NOT the
+// source of truth for mastery — recordLearningOutcome() (Phase 4) is, via
+// the LearningAttempt an Answer links to once evaluated (spec §21).
 // ---------------------------------------------------------------------------
 
 enum QuestionType {
-  recall
-  explain
-  compare
-  apply
-  scenario
-  troubleshooting
-  teach_back
-  oral
-  written_exam
-  transfer
+  RECALL
+  EXPLAIN
+  COMPARE
+  APPLY
+  TRANSFER
 }
 
 model Question {
   id               String       @id @default(cuid())
+  courseId         String
   conceptId        String
   type             QuestionType
   difficulty       Int          @default(1)
   prompt           String
+  /// Lowercased/whitespace-collapsed prompt, used for duplicate detection
+  /// (spec §24) without an embedding index — see question-generator.ts.
+  normalizedPrompt String
   expectedAnswer   String?
   rubric           Json?
   sourceReferences Json?
   createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
-  concept Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
-  answers Answer[]
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  answers               Answer[]
+  studySessionQuestions StudySessionQuestion[]
 
   @@index([conceptId])
+  @@index([courseId])
+  @@index([conceptId, normalizedPrompt])
   @@map("questions")
 }
 
 model Answer {
-  id                     String   @id @default(cuid())
-  questionId             String
-  userId                 String
-  answerText             String
-  score                  Float?
-  correctness            Float?
-  reasoningQuality       Float?
-  completeness           Float?
-  confidence             Float?
-  feedback               String?
-  detectedMisconceptions Json?
-  missingConcepts        Json?
-  createdAt              DateTime @default(now())
+  id                String  @id @default(cuid())
+  questionId        String
+  userId            String
+  sessionQuestionId String?
 
-  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answerText String
+  /// Normalized 0-1 self-reported confidence, same representation as LearningAttempt.confidence (Phase 4).
+  confidence Float?
 
+  // Filled in once AI evaluation succeeds; null while pending or if evaluation failed.
+  score                    Float?
+  /// Reuses Phase 4's tri-state SUCCESS/PARTIAL/FAILURE outcome enum — "correct" is
+  /// never collapsed to a boolean (spec §12), and this maps 1:1 onto recordLearningOutcome's outcome.
+  correctness              EvidenceOutcome?
+  reasoningQuality         Float?
+  completeness             Float?
+  feedback                 String?
+  correctAnswer            String?
+  strengths                Json?
+  missingPoints            Json?
+  /// Evaluator's raw error/misconception findings, kept as a snapshot for
+  /// audit — the StudentMistake rows created via recordLearningOutcome are
+  /// the authoritative record, not this column.
+  errors                   Json?
+  misconceptions           Json?
+  needsRemediation         Boolean          @default(false)
+  /// Set only if the evaluator flagged a prerequisite gap AND it was
+  /// validated against a real edge in this course's knowledge graph
+  /// (spec §14) — never trusted from the model directly.
+  prerequisiteGapConceptId String?
+
+  usedHint       Boolean @default(false)
+  revealedAnswer Boolean @default(false)
+
+  durationSeconds Int?
+  /// Set if AI evaluation failed after retries — the answer is preserved
+  /// so nothing is lost, and evaluation can be retried (spec §37).
+  evaluationError String?
+  /// Set once recordLearningOutcome() has run for this answer — the resulting attempt/evidence/mastery update.
+  attemptId       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  question        Question              @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionQuestion StudySessionQuestion? @relation(fields: [sessionQuestionId], references: [id], onDelete: SetNull)
+  attempt         LearningAttempt?      @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionQuestionId])
   @@index([questionId])
   @@index([userId])
   @@map("answers")
+}
+
+// ---------------------------------------------------------------------------
+// Active Recall sessions (Phase 5)
+//
+// A StudySession is one continuous study activity; StudySessionQuestion
+// instances record which questions were shown, in what order, and the
+// ephemeral hint/reveal state accumulated before the student finally
+// submits (at which point it links to the resulting Answer/LearningAttempt).
+// Reconstructable after a page refresh entirely from these rows (spec §21).
+// ---------------------------------------------------------------------------
+
+enum StudySessionMode {
+  ACTIVE_RECALL
+}
+
+enum StudySessionStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+model StudySession {
+  id       String             @id @default(cuid())
+  userId   String
+  courseId String
+  mode     StudySessionMode   @default(ACTIVE_RECALL)
+  status   StudySessionStatus @default(ACTIVE)
+
+  /// Configured session length (spec §27) — how many questions this session targets.
+  targetLength      Int
+  questionsAnswered Int @default(0)
+  questionsCorrect  Int @default(0)
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course                 @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  questions StudySessionQuestion[]
+
+  @@index([userId])
+  @@index([courseId])
+  @@index([userId, status])
+  @@map("study_sessions")
+}
+
+model StudySessionQuestion {
+  id         String @id @default(cuid())
+  sessionId  String
+  questionId String
+  /// 1-based order within the session.
+  position   Int
+
+  presentedAt DateTime  @default(now())
+  answeredAt  DateTime?
+  attemptId   String?
+  /// Concise, product-level explanation of why this concept was chosen (spec §32) — persisted so it survives a page refresh.
+  reason      String?
+
+  /// Hint/reveal state while this question is still unanswered; folded into
+  /// the LearningAttempt (usedHint/revealedAnswer) once submitted (spec §18-19).
+  hintsUsed Int     @default(0)
+  revealed  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  session  StudySession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  attempt  LearningAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  answer   Answer?
+
+  @@unique([sessionId, position])
+  @@index([sessionId])
+  @@index([questionId])
+  @@map("study_session_questions")
 }
 
 // ---------------------------------------------------------------------------
