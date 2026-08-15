@@ -1,4 +1,6 @@
 import type { ConceptMasterySummary, EvidenceSummary, MistakeSummary, PrerequisiteStatusNode } from "@/lib/services/student-knowledge";
+import type { ReviewItemDetail } from "@/lib/review/review-queries";
+import { formatRelativeDays } from "@/lib/format";
 import { MistakeResolveButton } from "./MistakeResolveButton";
 import { formatMasteryPercent, masteryStatusLabel } from "./mastery-status-label";
 
@@ -24,13 +26,16 @@ export function ConceptMyKnowledge({
   prerequisiteStatus,
   evidence,
   mistakes,
+  reviewDetail,
 }: {
   mastery: ConceptMasterySummary;
   prerequisiteStatus: PrerequisiteStatusNode | null;
   evidence: EvidenceSummary[];
   mistakes: MistakeSummary[];
+  reviewDetail?: ReviewItemDetail | null;
 }) {
   const status = masteryStatusLabel(mastery.status);
+  const accuracy = mastery.attemptCount > 0 ? mastery.successCount / mastery.attemptCount : null;
 
   return (
     <div className="mt-8 rounded-lg border-2 border-dashed border-zinc-300 p-4 dark:border-zinc-700">
@@ -57,10 +62,14 @@ export function ConceptMyKnowledge({
             <DimensionBar label="Transfer" score={mastery.transferScore} />
           </div>
 
-          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
             <div>
               <dt className="text-xs text-zinc-400">Confidence</dt>
               <dd className="text-zinc-900 dark:text-zinc-50">{formatMasteryPercent(mastery.confidenceScore)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-zinc-400">Accuracy</dt>
+              <dd className="text-zinc-900 dark:text-zinc-50">{accuracy == null ? "—" : formatMasteryPercent(accuracy)}</dd>
             </div>
             <div>
               <dt className="text-xs text-zinc-400">Attempts</dt>
@@ -76,6 +85,28 @@ export function ConceptMyKnowledge({
             </div>
           </dl>
         </>
+      )}
+
+      {reviewDetail && (
+        <div className="mt-4">
+          <h3 className="text-xs font-medium text-zinc-500">Spaced review</h3>
+          <dl className="mt-1 grid grid-cols-3 gap-3 text-sm">
+            <div>
+              <dt className="text-xs text-zinc-400">Reviews</dt>
+              <dd className="text-zinc-900 dark:text-zinc-50">{reviewDetail.reviewCount}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-zinc-400">Last review</dt>
+              <dd className="text-zinc-900 dark:text-zinc-50">
+                {reviewDetail.item.lastReviewedAt ? formatRelativeDays(reviewDetail.item.lastReviewedAt) : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-zinc-400">Next review</dt>
+              <dd className="text-zinc-900 dark:text-zinc-50">{formatRelativeDays(reviewDetail.item.nextReviewAt)}</dd>
+            </div>
+          </dl>
+        </div>
       )}
 
       {prerequisiteStatus && prerequisiteStatus.prerequisites.length > 0 && (

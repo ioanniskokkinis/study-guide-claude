@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { DEFAULT_PASSING_SCORE, DEFAULT_QUESTION_COUNT } from "@/lib/exam/config";
 
 interface Turn {
@@ -128,7 +129,14 @@ export function OralExamRunner({ courseId }: { courseId: string }) {
     return <p className="text-sm text-zinc-500">The examiner is getting ready…</p>;
   }
   if (load.status === "error") {
-    return <p className="text-sm text-red-600 dark:text-red-400">{load.message}</p>;
+    return (
+      <div>
+        <p className="text-sm text-red-600 dark:text-red-400">{load.message}</p>
+        <Link href={`/courses/${courseId}/exam`} className="mt-4 inline-block text-sm text-zinc-500 hover:underline">
+          ← Back to exams
+        </Link>
+      </div>
+    );
   }
 
   return (

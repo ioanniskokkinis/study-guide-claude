@@ -4,11 +4,11 @@ An adaptive AI tutor that builds a persistent model of what a student knows,
 diagnoses gaps, and chooses the next best learning action — not a chatbot
 with PDFs attached.
 
-This repo is built in phases (see `PHASES.md` for status). **Phases 1–9
+This repo is built in phases (see `PHASES.md` for status). **Phases 1–10
 (foundation, course ingestion, knowledge graph, student knowledge model,
 Active Recall, adaptive engine, intelligent tutor, exam & assessment
-engine, spaced repetition) are complete**; the remaining study modes
-described in the full product spec ship in later phases.
+engine, spaced repetition, polish/MVP completion) are all complete** — this
+is the MVP.
 
 ## Stack
 
@@ -700,6 +700,76 @@ against real Postgres, not a live end-to-end run. Every deterministic
 piece (scheduling, due/overdue, idempotency, the adaptive engine signal)
 was verified directly.
 
+## Polish / MVP completion (Phase 10)
+
+Phase 10 adds no new domain models and redesigns no architecture — the
+spec it shipped from initially proposed a parallel set of models
+(`StudentConceptKnowledge`, `ConceptPrerequisite`, `ReviewSchedule`,
+`LearningEvent`, ...) that, on inspection, already exist under different
+names from Phases 4-9 (`StudentConceptMastery`, `ConceptRelationship`,
+`ReviewItem`/`ReviewEvent`, `LearningAttempt`/`KnowledgeEvidence`). Rather
+than forking the student model into two disconnected systems, Phase 10 is
+entirely a UX/wiring pass: real product surfaces built by composing data
+Phases 4-9 already persist, plus fixing concrete bugs an inspection pass
+turned up. Nothing here calls Claude — every number is a deterministic
+read or a simple aggregate.
+
+**Inspection first.** Every route, page, and client component was audited
+for missing empty/loading/error states, dead-end error screens, and
+navigation gaps before any UI was added. That surfaced (and this phase
+fixes) four real bugs: the document detail page was missing
+`force-dynamic` (the only detail page lacking it despite showing live
+processing status); the exam runner page never validated the `examId`
+server-side, so a bad id silently fell through to the client's own error
+path instead of 404ing; `ExamGoalForm` never checked `response.ok` on its
+two mutations, silently swallowing failures; `OralExamRunner`'s terminal
+error state had no way back to the course.
+
+**Navigation.** `src/components/nav/AppNav.tsx` is a small client
+component (`usePathname()`-driven, no props, no extra fetch) rendered from
+the root layout — a persistent header with a global Courses link, plus a
+contextual Overview/Study/Tutor/Exam/Review/Progress sub-nav that appears
+automatically inside any `/courses/:id/...` route. Previously the only way
+between sections was navigating back to the course detail page first.
+
+**`src/lib/dashboard/`** — the read-only composition layer every new
+surface is built on:
+- `study-plan.ts` — `getTodaysStudyPlan()` builds a time-boxed "Today's
+  Plan" by calling the Phase 6 adaptive engine's own exported pipeline
+  pieces (`getStudentState`, `calculateConceptScores`,
+  `generateCandidateActions`) directly, deduplicating to one entry per
+  concept and adding a Phase 9 review-due item — never a second scoring
+  system, just ranking and time-boxing what the engine already computed.
+- `notifications.ts` — real, data-derived notifications (reviews due, a
+  weakening concept, a study streak, an upcoming exam) from existing
+  reads; no AI, no fabricated content.
+- `streak.ts` — a general "any learning activity" day-streak, distinct
+  from (but the same shape as) Phase 9's review-specific streak.
+- `analytics.ts` / `sparkline.ts` — the aggregate behind
+  `/courses/:id/progress`: overall mastery, accuracy, questions answered,
+  study time, streak, concepts mastered, weak concepts, reviews completed/
+  due, exam score history, and a mastery-over-time trend built from real
+  `KnowledgeEvidence` rows, bucketed into calendar weeks and rendered as a
+  dependency-free inline SVG sparkline (same zero-library convention as
+  the knowledge graph visualization).
+
+**Concept Mastery Dashboard.** `ConceptMyKnowledge` now also shows
+accuracy and, when a `ReviewItem` exists for that concept, its lifetime
+review count (from `ReviewEvent`, not `repetitionCount` — which resets on
+a lapse and would understate history) plus last/next review dates.
+
+**ReviewRunner parity.** The review runner now has Hint and "I don't
+know" (reveal) buttons wired to the *existing* `/api/study-sessions/:id/
+{hint,reveal}` routes — Active Recall already had this; Phase 9's initial
+review UI didn't, until now. No new evaluation logic, same evidence rules
+(a revealed answer produces no independent evidence) already enforced by
+Phase 5.
+
+**Known limitation:** the mastery-over-time trend has no data until a
+course has multiple weeks of real evidence, and the whole analytics page
+is empty for a never-studied course by design (an explicit empty state,
+not an error).
+
 ## Scripts
 
 | Script | Purpose |
@@ -718,7 +788,8 @@ was verified directly.
 ```
 src/
   app/
-    courses/                          Courses list, course/document/knowledge-graph/study/tutor/exam/review pages
+    courses/                          Courses list, course/document/knowledge-graph/study/tutor/
+                                       exam/review/progress pages
     concepts/[id]/                    Concept detail page
     api/courses, api/documents/,
     api/concepts/, api/study-sessions/,
@@ -727,9 +798,10 @@ src/
     api/exams/, api/review-sessions/   Route handlers (see API surfaces above)
   components/courses, documents/,
              knowledge/, study/, tutor/,
-             exam/                      Client components (upload, delete, forms, graph viz,
+             exam/, dashboard/, nav/    Client components (upload, delete, forms, graph viz,
                                         Active Recall session UI, adaptive dashboard, tutor chat,
-                                        exam runner/results/readiness/oral examiner, review runner)
+                                        exam runner/results/readiness/oral examiner, review runner,
+                                        mastery sparkline, persistent AppNav — Phase 10)
   lib/
     ai/                Server-side Claude service (claude.ts), retry.ts, answer-evaluator.ts
       prompts/         Prompt templates + their Zod output schemas, kept out of components
@@ -749,6 +821,9 @@ src/
     review/             scheduler.ts, review-queries.ts, review-orchestrator.ts (Phase 9 —
                          deterministic spaced repetition, reuses Phase 5's session/question
                          infrastructure rather than duplicating it)
+    dashboard/          study-plan.ts, notifications.ts, streak.ts, analytics.ts, sparkline.ts
+                         (Phase 10 — read-only composition over Phases 4-9's existing data,
+                         zero new domain models, zero AI calls)
     services/          Ownership-checked course/document/knowledge/student-knowledge/
                         learning-goals business logic
     storage/           Storage abstraction (local FS now, S3-compatible later)

@@ -106,5 +106,27 @@ each phase depends on the previous one's persisted data model.
       KnowledgeEvidence/LearningAttempt evidence stream Phase 8 already
       writes to. `/courses/:id/review` and a "Reviews" card on the study
       dashboard round out the UI.
-- [ ] **Phase 10 — Polish.** Dashboard, progress charts, UX, performance,
-      tests, error handling.
+- [x] **Phase 10 — Polish / MVP completion.** No new domain models and no
+      redesigned architecture — every number on the new UI surfaces is
+      composed from data Phases 4-9 already persist (`src/lib/dashboard/`:
+      `study-plan.ts`, `notifications.ts`, `streak.ts`, `analytics.ts`,
+      `sparkline.ts`), none of it AI-generated. A persistent nav bar
+      (`AppNav`) replaces buried inline links with a contextual Overview/
+      Study/Tutor/Exam/Review/Progress bar inside each course. The study
+      dashboard is now a real "what should I do today" page: a greeting,
+      overall-progress bar, study streak, real data-derived notifications
+      (due reviews, weakening concepts, an upcoming exam, a study streak),
+      a *Today's Plan* time-boxed list built by ranking the Phase 6
+      adaptive engine's own candidate actions alongside a Phase 9 review
+      item (no second scoring system), a Reviews-due card, and a Weak
+      Areas card. A new `/courses/:id/progress` analytics page (stats,
+      concept mastery bars, a mastery-over-time sparkline built from real
+      `KnowledgeEvidence`, review-outcome history, exam score history) and
+      the concept detail page now also show each concept's review count/
+      last/next review and accuracy. `ReviewRunner` gained Hint/"I don't
+      know" parity with Active Recall by wiring in the *existing*
+      hint/reveal endpoints — no new evaluation logic. Fixed real bugs
+      found during the audit: a missing `force-dynamic` on the document
+      detail page, an unvalidated exam id silently falling through instead
+      of 404ing, `ExamGoalForm` swallowing failed requests, and
+      `OralExamRunner`'s error state being a dead end with no way back.

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { formatRelativeDays } from "@/lib/format";
 
 type Correctness = "SUCCESS" | "PARTIAL" | "FAILURE";
 type ReviewOutcomeValue = "AGAIN" | "HARD" | "GOOD" | "EASY";
@@ -70,12 +71,7 @@ async function parseJson(response: Response) {
 }
 
 function formatNextReview(iso: string | null): string {
-  if (!iso) return "—";
-  const next = new Date(iso);
-  const days = Math.round((next.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-  if (days <= 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return `In ${days} days`;
+  return iso ? formatRelativeDays(new Date(iso)) : "—";
 }
 
 export function ReviewRunner({ courseId, courseTitle }: { courseId: string; courseTitle: string }) {
@@ -87,6 +83,7 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
   const [ratingResult, setRatingResult] = useState<RatingResultDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
 
   const [answerText, setAnswerText] = useState("");
   const [confidence, setConfidence] = useState<number | null>(null);
@@ -132,6 +129,7 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
     setAnswerText("");
     setConfidence(null);
     setRatingResult(null);
+    setHint(null);
 
     if (state.session.status !== "ACTIVE") {
       void loadSummary(state.session.id);
@@ -193,6 +191,58 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not evaluate this answer.");
       setPhase("question");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function requestHint() {
+    if (!session || !sessionQuestion) return;
+    setIsBusy(true);
+    try {
+      const response = await fetch(`/api/study-sessions/${session.id}/hint`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionQuestionId: sessionQuestion.id }),
+      });
+      const body = await parseJson(response);
+      if (!response.ok) throw new Error(body.error ?? "Could not get a hint.");
+      setHint(body.hint);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not get a hint.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function revealAnswer() {
+    if (!session || !sessionQuestion) return;
+    if (!confirm("Revealing the answer will not count as a normal attempt. Continue?")) return;
+    setIsBusy(true);
+    try {
+      const response = await fetch(`/api/study-sessions/${session.id}/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionQuestionId: sessionQuestion.id }),
+      });
+      const body = await parseJson(response);
+      if (!response.ok) throw new Error(body.error ?? "Could not reveal the answer.");
+      setSession(body.session);
+      setSessionQuestion({
+        ...sessionQuestion,
+        answeredAt: new Date().toISOString(),
+        answer: {
+          id: "",
+          score: 0,
+          correctness: "FAILURE",
+          feedback: "You revealed the answer instead of attempting retrieval.",
+          correctAnswer: body.correctAnswer,
+          revealedAnswer: true,
+        },
+      });
+      setPhase("rating");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reveal the answer.");
     } finally {
       setIsBusy(false);
     }
@@ -350,6 +400,12 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
               className="mt-4 w-full rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700 dark:bg-transparent"
             />
 
+            {hint && (
+              <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                💡 {hint}
+              </p>
+            )}
+
             <div className="mt-3 flex items-center gap-2 text-sm text-zinc-500">
               <span>Confidence:</span>
               {[1, 2, 3, 4, 5].map((level) => (
@@ -371,7 +427,25 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
 
             {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex items-center justify-between">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={requestHint}
+                  disabled={isBusy || phase === "evaluating"}
+                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                >
+                  Hint
+                </button>
+                <button
+                  type="button"
+                  onClick={revealAnswer}
+                  disabled={isBusy || phase === "evaluating"}
+                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                >
+                  I don&rsquo;t know
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={submitAnswer}

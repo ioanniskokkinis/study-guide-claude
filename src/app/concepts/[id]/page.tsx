@@ -9,6 +9,7 @@ import {
   getMastery,
   getPrerequisiteStatus,
 } from "@/lib/services/student-knowledge";
+import { getReviewItemDetail } from "@/lib/review/review-queries";
 import { ConceptMyKnowledge } from "@/components/knowledge/ConceptMyKnowledge";
 
 export const dynamic = "force-dynamic";
@@ -66,11 +67,12 @@ export default async function ConceptDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const [mastery, prerequisiteStatus, evidence, mistakes] = await Promise.all([
+  const [mastery, prerequisiteStatus, evidence, mistakes, reviewDetail] = await Promise.all([
     getMastery(user.id, id),
     getPrerequisiteStatus(user.id, id),
     getConceptEvidence(user.id, id),
     getConceptMistakes(user.id, id),
+    getReviewItemDetail(user.id, id),
   ]);
 
   return (
@@ -88,6 +90,7 @@ export default async function ConceptDetailPage({ params }: PageProps) {
           prerequisiteStatus={prerequisiteStatus}
           evidence={evidence ?? []}
           mistakes={mistakes ?? []}
+          reviewDetail={reviewDetail}
         />
       )}
 

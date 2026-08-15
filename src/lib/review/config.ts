@@ -64,3 +64,6 @@ export const MAX_REVIEW_SESSION_SIZE = 20;
 
 /** How far back review-streak calculation looks for consecutive reviewed days (spec §16). */
 export const STREAK_LOOKBACK_DAYS = 60;
+
+/** A not-yet-due item within this many days counts as "due soon" for review queue grouping (Phase 10 §10.6). */
+export const DUE_SOON_WINDOW_DAYS = 3;

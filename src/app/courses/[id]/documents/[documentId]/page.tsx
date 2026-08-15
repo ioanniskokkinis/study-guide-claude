@@ -6,6 +6,8 @@ import { getDocumentChunks, getDocumentForUser } from "@/lib/services/documents"
 import { statusLabel } from "@/components/documents/status-label";
 import { formatBytes } from "@/lib/format";
 
+export const dynamic = "force-dynamic";
+
 interface PageProps {
   params: Promise<{ id: string; documentId: string }>;
 }

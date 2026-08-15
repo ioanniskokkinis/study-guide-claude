@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import type { ReviewItem, ReviewItemStatus } from "@/generated/prisma/client";
-import { INITIAL_DIFFICULTY, INITIAL_ONSET_DAYS, STREAK_LOOKBACK_DAYS } from "./config";
+import { DUE_SOON_WINDOW_DAYS, INITIAL_DIFFICULTY, INITIAL_ONSET_DAYS, STREAK_LOOKBACK_DAYS } from "./config";
 import { addDays } from "./scheduler";
 
 /**
@@ -99,6 +99,20 @@ export async function getReviewItem(userId: string, conceptId: string): Promise<
   return prisma.reviewItem.findUnique({ where: { userId_conceptId: { userId, conceptId } } });
 }
 
+export interface ReviewItemDetail {
+  item: ReviewItem;
+  /** Lifetime count of completed reviews for this item (spec's "Reviews: 6") — counted from ReviewEvent rather than repetitionCount, since repetitionCount resets on a lapse and would understate a concept's real review history. */
+  reviewCount: number;
+}
+
+/** Returns null if the concept has no review schedule yet (never studied, or Review hasn't run for it). Used by the concept mastery dashboard (Phase 10 §10.11). */
+export async function getReviewItemDetail(userId: string, conceptId: string): Promise<ReviewItemDetail | null> {
+  const item = await getReviewItem(userId, conceptId);
+  if (!item) return null;
+  const reviewCount = await prisma.reviewEvent.count({ where: { reviewItemId: item.id } });
+  return { item, reviewCount };
+}
+
 function dayKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
@@ -160,5 +174,72 @@ export async function getReviewState(userId: string, courseId: string, now: Date
     overdueCount: due.filter((d) => d.overdueDays >= 1).length,
     nextReviewAt: upcoming?.nextReviewAt ?? null,
     reviewStreak,
+  };
+}
+
+export interface ReviewQueueEntry {
+  conceptId: string;
+  conceptName: string;
+  status: ReviewItemStatus;
+  nextReviewAt: Date;
+  overdueDays: number;
+  /** 0-1 overall mastery from the Student Knowledge Model (Phase 4) — 0 if no mastery row exists yet. */
+  mastery: number;
+}
+
+export interface ReviewQueue {
+  overdue: ReviewQueueEntry[];
+  dueToday: ReviewQueueEntry[];
+  dueSoon: ReviewQueueEntry[];
+}
+
+/**
+ * The grouped presentation of the due queue (spec §10.6) — Overdue / Due
+ * today / Due soon, each with mastery %. Still built entirely from
+ * getDueReviews/overdueDays and the existing Student Knowledge Model; no
+ * second due-state calculation (spec §7's "one canonical definition" still
+ * holds — this only groups and enriches what getDueReviews already
+ * returns).
+ */
+export async function getReviewQueue(userId: string, courseId: string, now: Date = new Date()): Promise<ReviewQueue> {
+  const soonCutoff = addDays(now, DUE_SOON_WINDOW_DAYS);
+
+  const [due, soonItems, masteries] = await Promise.all([
+    getDueReviews(userId, courseId, now),
+    prisma.reviewItem.findMany({
+      where: { userId, courseId, nextReviewAt: { gt: now, lte: soonCutoff } },
+      include: { concept: { select: { name: true } } },
+      orderBy: { nextReviewAt: "asc" },
+    }),
+    prisma.studentConceptMastery.findMany({
+      where: { userId, concept: { courseId } },
+      select: { conceptId: true, overallMastery: true },
+    }),
+  ]);
+
+  const masteryByConceptId = new Map(masteries.map((m) => [m.conceptId, m.overallMastery]));
+
+  const dueEntries: ReviewQueueEntry[] = due.map((item) => ({
+    conceptId: item.conceptId,
+    conceptName: item.conceptName,
+    status: item.status,
+    nextReviewAt: item.nextReviewAt,
+    overdueDays: item.overdueDays,
+    mastery: masteryByConceptId.get(item.conceptId) ?? 0,
+  }));
+
+  const dueSoon: ReviewQueueEntry[] = soonItems.map((item) => ({
+    conceptId: item.conceptId,
+    conceptName: item.concept.name,
+    status: item.status,
+    nextReviewAt: item.nextReviewAt,
+    overdueDays: 0,
+    mastery: masteryByConceptId.get(item.conceptId) ?? 0,
+  }));
+
+  return {
+    overdue: dueEntries.filter((e) => e.overdueDays >= 1),
+    dueToday: dueEntries.filter((e) => e.overdueDays < 1),
+    dueSoon,
   };
 }
