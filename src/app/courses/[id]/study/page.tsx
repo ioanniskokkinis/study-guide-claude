@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { findOwnedCourse } from "@/lib/services/courses";
 import { getCourseMastery, bucketForStatus } from "@/lib/services/student-knowledge";
+import { getReviewState } from "@/lib/review/review-queries";
 import { AdaptiveDashboard } from "@/components/study/AdaptiveDashboard";
 import { ExamGoalForm } from "@/components/study/ExamGoalForm";
 
@@ -18,7 +19,10 @@ export default async function StudyDashboardPage({ params }: PageProps) {
   const course = await findOwnedCourse(user.id, courseId);
   if (!course) notFound();
 
-  const mastery = await getCourseMastery(user.id, courseId);
+  const [mastery, reviewState] = await Promise.all([
+    getCourseMastery(user.id, courseId),
+    getReviewState(user.id, courseId),
+  ]);
   const concepts = mastery?.concepts ?? [];
   const hasKnowledgeGraph = course.knowledgeStatus === "READY" && concepts.length > 0;
   const practicedConcepts = concepts.filter((c) => c.exposureCount > 0);
@@ -49,6 +53,33 @@ export default async function StudyDashboardPage({ params }: PageProps) {
               You&rsquo;re doing well across this course — recommendations will lean toward challenge and retention
               rather than new material.
             </p>
+          )}
+
+          {reviewState && (
+            <div className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Reviews</h2>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Due now: <span className="font-medium text-zinc-700 dark:text-zinc-300">{reviewState.dueCount}</span>
+                    {" · "}
+                    Overdue: <span className="font-medium text-zinc-700 dark:text-zinc-300">{reviewState.overdueCount}</span>
+                    {reviewState.reviewStreak > 0 && (
+                      <>
+                        {" · "}
+                        {reviewState.reviewStreak} day{reviewState.reviewStreak === 1 ? "" : "s"} streak
+                      </>
+                    )}
+                  </p>
+                </div>
+                <Link
+                  href={`/courses/${course.id}/review`}
+                  className="shrink-0 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                >
+                  Start Review
+                </Link>
+              </div>
+            </div>
           )}
 
           <div className="mt-6">

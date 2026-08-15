@@ -82,6 +82,29 @@ each phase depends on the previous one's persisted data model.
       and idempotent. A written/scenario/adaptive exam UI, a simple
       text-based oral examiner chat, a results/readiness dashboard, and a
       one-click targeted retest round out `/courses/:id/exam`.
-- [ ] **Phase 9 — Spaced repetition.** Review scheduling.
+- [x] **Phase 9 — Spaced repetition.** A deterministic spaced-repetition
+      scheduler (`src/lib/review/scheduler.ts`) — Claude never chooses a
+      review date. `ReviewItem` persists one schedule per (student,
+      concept); `ReviewEvent` is its append-only history, never overwritten.
+      `scheduleReview()` folds in the previous interval, the self-rated
+      AGAIN/HARD/GOOD/EASY outcome, difficulty, repetition/lapse counts, and
+      (as bounded supporting signals) current mastery and recent recall
+      performance — every factor spec-required, all constants centralized
+      in `config.ts`. `review-queries.ts` is the one canonical due/overdue
+      definition the UI and the adaptive engine both read. A review session
+      reuses Active Recall almost entirely: it's a `StudySession` in a new
+      `REVIEW` mode, question generation reuses `getOrGenerateQuestion`,
+      and answering reuses the *existing* `/api/study-sessions/:id/answer`
+      route unchanged — the only new domain action is rating recall
+      quality and rescheduling. Rating is idempotent (a duplicate rating
+      request returns the original result rather than rescheduling twice)
+      via the evaluated attempt's id as the natural idempotency key. Due
+      reviews feed the Phase 6 adaptive engine's existing REVIEW action
+      score (never a second, competing priority system); a failed review
+      links straight into the existing Tutor remediation flow; exam
+      evidence already reaches the scheduler for free through the shared
+      KnowledgeEvidence/LearningAttempt evidence stream Phase 8 already
+      writes to. `/courses/:id/review` and a "Reviews" card on the study
+      dashboard round out the UI.
 - [ ] **Phase 10 — Polish.** Dashboard, progress charts, UX, performance,
       tests, error handling.

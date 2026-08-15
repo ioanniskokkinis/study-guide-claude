@@ -7,7 +7,7 @@ import {
   REPEATED_FAILURE_WINDOW_SIZE,
   REVIEW_MASTERY_FLOOR,
 } from "./config";
-import type { ConceptValueBreakdown } from "./concept-scoring";
+import { calculateReviewUrgencyScore, type ConceptValueBreakdown } from "./concept-scoring";
 import type { RecentAttemptInfo, RecentMistakeInfo, StudentLearningState } from "./student-state";
 
 /**
@@ -73,6 +73,8 @@ export interface CandidateContext {
   /** This concept's recent attempts, most-recent-first. */
   attempts: RecentAttemptInfo[];
   hasSevereMisconception: boolean;
+  /** 0-1 spaced-repetition due urgency (Phase 9) — 0 when the concept has no ReviewItem yet or isn't due. */
+  reviewUrgency: number;
 }
 
 export function buildCandidateContext(conceptId: string, value: ConceptValueBreakdown, state: StudentLearningState, now: Date = new Date()): CandidateContext {
@@ -80,6 +82,7 @@ export function buildCandidateContext(conceptId: string, value: ConceptValueBrea
     value,
     attempts: state.recentAttemptsByConceptId.get(conceptId) ?? [],
     hasSevereMisconception: hasSevereMisconception(state.recentMistakesByConceptId.get(conceptId) ?? [], now),
+    reviewUrgency: calculateReviewUrgencyScore(conceptId, state),
   };
 }
 
@@ -111,11 +114,17 @@ export function scorePrerequisiteReview(ctx: CandidateContext): number {
   return clamp01(0.45 * targetWeakness + 0.4 * prerequisiteWeakness + 0.15);
 }
 
-/** Reasonable mastery, but forgetting risk is climbing (spec §19). 0 while still weak (that's Active Recall's job) or blocked. */
+/**
+ * Reasonable mastery, but either forgetting risk is climbing (spec §19) or
+ * a Phase 9 ReviewItem has actually come due — the stronger of the two
+ * signals wins, so a concrete due-for-review schedule never scores lower
+ * than the coarser mastery-decay heuristic already did. 0 while still weak
+ * (that's Active Recall's job) or blocked.
+ */
 export function scoreReview(ctx: CandidateContext): number {
   const mastery = 1 - ctx.value.weakness;
   if (mastery < REVIEW_MASTERY_FLOOR || ctx.value.block.blocked) return 0;
-  return clamp01(ctx.value.forgettingRisk);
+  return clamp01(Math.max(ctx.value.forgettingRisk, ctx.reviewUrgency));
 }
 
 /**

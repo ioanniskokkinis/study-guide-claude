@@ -40,6 +40,12 @@ export interface LearningGoalInfo {
   targetConceptIds: string[] | null;
 }
 
+export interface ReviewDueInfo {
+  due: boolean;
+  overdueDays: number;
+  status: string;
+}
+
 export interface StudentLearningState {
   userId: string;
   courseId: string;
@@ -55,6 +61,15 @@ export interface StudentLearningState {
   lastActivityAt: Date | null;
   /** Concept ids ordered most-recently-practiced-first, deduplicated — drives the recency/interleaving penalty. */
   recentlyPracticedConceptIds: string[];
+  /**
+   * Phase 9's spaced-repetition due-state per concept, keyed by conceptId.
+   * Optional so state built without it (existing tests/fixtures) still
+   * type-checks and behaves exactly as before — see
+   * calculateReviewUrgencyScore()'s "no data -> 0" default (spec §8: this
+   * feeds the *existing* REVIEW action scoring, it does not add a second,
+   * competing priority system).
+   */
+  reviewByConceptId?: Map<string, ReviewDueInfo>;
 }
 
 const GLOBAL_RECENT_ATTEMPTS_LIMIT = 100;
@@ -64,7 +79,8 @@ export async function getStudentLearningState(userId: string, courseId: string):
   const course = await prisma.course.findFirst({ where: { id: courseId, userId }, select: { id: true } });
   if (!course) return null;
 
-  const [concepts, courseMastery, prerequisiteEdges, recentAttempts, recentMistakes, goals] = await Promise.all([
+  const now = new Date();
+  const [concepts, courseMastery, prerequisiteEdges, recentAttempts, recentMistakes, goals, reviewItems] = await Promise.all([
     prisma.concept.findMany({ where: { courseId }, select: { id: true, name: true, difficulty: true } }),
     getCourseMastery(userId, courseId),
     prisma.conceptRelationship.findMany({
@@ -84,6 +100,10 @@ export async function getStudentLearningState(userId: string, courseId: string):
       select: { id: true, conceptId: true, category: true, severity: true, createdAt: true },
     }),
     prisma.learningGoal.findMany({ where: { userId, courseId } }),
+    prisma.reviewItem.findMany({
+      where: { userId, courseId },
+      select: { conceptId: true, nextReviewAt: true, status: true },
+    }),
   ]);
 
   const masteryByConceptId = new Map((courseMastery?.concepts ?? []).map((c) => [c.conceptId, c]));
@@ -116,6 +136,13 @@ export async function getStudentLearningState(userId: string, courseId: string):
     }
   }
 
+  const reviewByConceptId = new Map<string, ReviewDueInfo>();
+  for (const item of reviewItems) {
+    const due = item.nextReviewAt.getTime() <= now.getTime();
+    const overdueDays = due ? (now.getTime() - item.nextReviewAt.getTime()) / (1000 * 60 * 60 * 24) : 0;
+    reviewByConceptId.set(item.conceptId, { due, overdueDays, status: item.status });
+  }
+
   return {
     userId,
     courseId,
@@ -132,5 +159,6 @@ export async function getStudentLearningState(userId: string, courseId: string):
     })),
     lastActivityAt: recentAttempts[0]?.createdAt ?? null,
     recentlyPracticedConceptIds,
+    reviewByConceptId,
   };
 }

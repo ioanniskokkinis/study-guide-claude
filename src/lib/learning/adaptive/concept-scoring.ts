@@ -12,6 +12,7 @@ import {
   PREREQUISITE_MASTERY_THRESHOLD,
   RECENCY_MAX_PENALTY,
   RECENCY_WINDOW_SIZE,
+  REVIEW_URGENCY_SATURATION_DAYS,
 } from "./config";
 import type { StudentLearningState } from "./student-state";
 
@@ -189,6 +190,21 @@ export function calculateForgettingRiskScore(
 
   // Scale by mastery: there's little to forget if mastery was never high to begin with.
   return clamp01((1 - retention) * mastery.overallMastery);
+}
+
+// ---------------------------------------------------------------------------
+// Review due-ness (Phase 9) — feeds scoreReview() (action-scoring.ts)
+// alongside the pre-existing decay-based forgettingRisk above, rather than
+// introducing a second, competing weakness/priority system (spec §8). Zero
+// when the student has no ReviewItem data for this concept yet (e.g. a
+// course only ever studied via plain Active Recall) — 0 is a safe,
+// no-op default.
+// ---------------------------------------------------------------------------
+
+export function calculateReviewUrgencyScore(conceptId: string, state: StudentLearningState): number {
+  const review = state.reviewByConceptId?.get(conceptId);
+  if (!review || !review.due) return 0;
+  return clamp01(review.overdueDays / REVIEW_URGENCY_SATURATION_DAYS);
 }
 
 // ---------------------------------------------------------------------------

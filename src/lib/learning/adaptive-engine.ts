@@ -175,14 +175,19 @@ export function generateCandidateActions(
 
     const reviewScore = scoreReview(ctx);
     if (reviewScore > 0) {
+      const review = state.reviewByConceptId?.get(concept.id);
+      const overdueWholeDays = review ? Math.floor(review.overdueDays) : 0;
+      const message =
+        review?.due && overdueWholeDays >= 1
+          ? `${concept.name} is due for review — ${overdueWholeDays} day${overdueWholeDays === 1 ? "" : "s"} overdue.`
+          : review?.due
+            ? `${concept.name} is due for review.`
+            : `You haven't reviewed ${concept.name} recently and retention risk is increasing.`;
       candidates.push({
         actionType: "REVIEW",
         conceptId: concept.id,
         priority: reviewScore,
-        reason: {
-          type: "FORGETTING_RISK",
-          message: `You haven't reviewed ${concept.name} recently and retention risk is increasing.`,
-        },
+        reason: { type: "FORGETTING_RISK", message },
         factors: buildFactors(concept.id, value, state, now),
       });
     }

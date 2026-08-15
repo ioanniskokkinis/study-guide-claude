@@ -63,6 +63,9 @@ export const REPEATED_FAILURE_STRONG_THRESHOLD = 3;
 /** Success streak needed (on top of high mastery) to favor CHALLENGE (spec §21). */
 export const CHALLENGE_SUCCESS_STREAK_THRESHOLD = 3;
 
+/** Phase 9: overdue days at which review urgency saturates to 1 — feeds scoreReview() alongside forgettingRisk, never as a competing signal (spec §8). */
+export const REVIEW_URGENCY_SATURATION_DAYS = 7;
+
 /** Estimated minutes per action type, shown to the student (spec §2 example). */
 export const ESTIMATED_DURATION_MINUTES: Record<string, number> = {
   ACTIVE_RECALL: 5,

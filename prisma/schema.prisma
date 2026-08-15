@@ -32,7 +32,6 @@ model User {
   masteries             StudentConceptMastery[]
   answers               Answer[]
   studentMistakes       StudentMistake[]
-  reviews               Review[]
   aiUsageLogs           AiUsageLog[]
   learningAttempts      LearningAttempt[]
   knowledgeEvidence     KnowledgeEvidence[]
@@ -43,6 +42,8 @@ model User {
   studentMisconceptions StudentMisconception[]
   exams                 Exam[]
   examAnswers           ExamAnswer[]
+  reviewItems           ReviewItem[]
+  reviewEvents          ReviewEvent[]
 
   @@map("users")
 }
@@ -84,6 +85,7 @@ model Course {
   adaptiveDecisionLogs AdaptiveDecisionLog[]
   tutorSessions        TutorSession[]
   exams                Exam[]
+  reviewItems          ReviewItem[]
 
   @@index([userId])
   @@map("courses")
@@ -185,7 +187,6 @@ model Concept {
   masteries             StudentConceptMastery[]
   questions             Question[]
   studentMistakes       StudentMistake[]
-  reviews               Review[]
   learningAttempts      LearningAttempt[]
   knowledgeEvidence     KnowledgeEvidence[]
   adaptiveDecisionLogs  AdaptiveDecisionLog[]
@@ -193,6 +194,8 @@ model Concept {
   studentMisconceptions StudentMisconception[]
   tutorSessionOutcomes  TutorSessionOutcome[]
   examQuestions         ExamQuestion[]
+  reviewItems           ReviewItem[]
+  reviewEvents          ReviewEvent[]
 
   // Prevents duplicate concepts within a course (spec §2, §11 dedup).
   @@unique([courseId, normalizedName])
@@ -393,6 +396,7 @@ model LearningAttempt {
   answers               Answer[]
   studySessionQuestions StudySessionQuestion[]
   examAnswers           ExamAnswer[]
+  reviewEvents          ReviewEvent[]
 
   @@index([userId])
   @@index([conceptId])
@@ -516,6 +520,8 @@ model Answer {
 
 enum StudySessionMode {
   ACTIVE_RECALL
+  /// Phase 9: a session driven by the spaced-repetition due-queue instead of the adaptive engine's own concept choice — see src/lib/review/review-orchestrator.ts. Reuses every other StudySession/StudySessionQuestion/Answer mechanic unchanged (spec §10, §13).
+  REVIEW
 }
 
 enum StudySessionStatus {
@@ -638,33 +644,124 @@ model StudentMistake {
 }
 
 // ---------------------------------------------------------------------------
-// Spaced repetition
+// Spaced repetition (Phase 9)
+//
+// Replaces the Phase 1 `Review` stub — that model conflated a persistent
+// per-concept schedule with a single scheduled event and had no history
+// table, which can't satisfy "review history must never be overwritten"
+// (spec §4). It was never referenced by any business logic (grep-confirmed
+// before this rewrite), so this is a straight replacement, not a migration
+// of live data.
+//
+// ReviewItem is the persistent, one-row-per-(student, concept) schedule —
+// lazily created the first time a concept has real learning evidence
+// (mirrors StudentConceptMastery's lazy-creation pattern, spec §3).
+// ReviewEvent is the append-only history of every completed review (spec
+// §4) — never updated or deleted, one row per rating.
+//
+// The scheduler itself (src/lib/review/scheduler.ts) is a pure, deterministic
+// function; Claude is never involved in choosing a review date (spec §2).
+// `interval`/`stability` are both persisted (rather than collapsing to one
+// SM-2-style "ease") because they answer different questions: `stability`
+// is the model's current estimate of how many days this memory will hold
+// before it needs reinforcing, `interval` is the schedule gap actually
+// applied (normally derived from stability, kept distinct so future tuning
+// — fuzzing, rounding, per-mode caps — can diverge them without a schema
+// change). `difficulty` is a 1-5 per-item difficulty estimate on the same
+// scale used everywhere else in the app (Concept.difficulty,
+// Question.difficulty, ExamQuestion.difficulty) rather than a separate
+// ease-factor scale, so it's directly usable as a question-generation
+// difficulty without conversion.
 // ---------------------------------------------------------------------------
 
-enum ReviewOutcome {
-  again
-  hard
-  good
-  easy
+/// NEW: never reviewed. LEARNING: still in its first graduation cycle
+/// (spec §5's "repetition count"). REVIEW: graduated to long intervals.
+/// RELEARNING: lapsed out of REVIEW and is re-graduating.
+enum ReviewItemStatus {
+  NEW
+  LEARNING
+  REVIEW
+  RELEARNING
 }
 
-model Review {
-  id          String         @id @default(cuid())
-  userId      String
-  conceptId   String
-  scheduledAt DateTime
-  completedAt DateTime?
-  outcome     ReviewOutcome?
-  interval    Float          @default(0)
-  ease        Float          @default(2.5)
-  repetitions Int            @default(0)
+/// Self-rated recall quality (spec §4, §6) — Claude never assigns this, only the student does.
+enum ReviewOutcome {
+  AGAIN
+  HARD
+  GOOD
+  EASY
+}
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+/// Where a ReviewEvent originated — informational only, never branches scheduling logic (the algorithm is the same regardless of source).
+enum ReviewEventSource {
+  REVIEW_SESSION
+}
 
-  @@index([userId, scheduledAt])
-  @@index([conceptId])
-  @@map("reviews")
+model ReviewItem {
+  id        String @id @default(cuid())
+  userId    String
+  /// Denormalized from concept.courseId so due-review queries never need a join through Concept (spec §17-18's course-scoped due query is on the hot path).
+  courseId  String
+  conceptId String
+
+  status ReviewItemStatus @default(NEW)
+
+  /// Days until the next scheduled review, as actually applied (may differ slightly from `stability` — see model comment above).
+  interval   Float @default(0)
+  /// The scheduler's current estimate, in days, of how long this memory will hold before retrieval becomes unreliable.
+  stability  Float @default(0)
+  /// 1-5, same scale as Concept/Question/ExamQuestion difficulty — higher means this item has been harder for this student to recall.
+  difficulty Float @default(3)
+
+  /// Consecutive successful (non-AGAIN) reviews since the last lapse — resets to 0 on AGAIN (spec §6).
+  repetitionCount Int @default(0)
+  /// Total AGAIN outcomes ever recorded for this item — cumulative, never decremented (spec §6).
+  lapseCount      Int @default(0)
+
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime  @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course  Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  concept Concept       @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  events  ReviewEvent[]
+
+  /// One review schedule per student per concept (lazily created) — the canonical due-state query key (spec §7, §18).
+  @@unique([userId, conceptId])
+  @@index([userId, nextReviewAt])
+  @@index([userId, conceptId])
+  @@index([courseId])
+  @@map("review_items")
+}
+
+/// Immutable history of every completed review (spec §4) — never updated after creation. `attemptId` is unique and required: every review event is created from exactly one evaluated LearningAttempt (the answer that was rated), which doubles as the idempotency key for review submission (spec §21 — retrying the same rating request finds the existing event instead of rescheduling twice).
+model ReviewEvent {
+  id           String @id @default(cuid())
+  reviewItemId String
+  userId       String
+  conceptId    String
+
+  outcome          ReviewOutcome
+  previousInterval Float
+  newInterval      Float
+  source           ReviewEventSource @default(REVIEW_SESSION)
+
+  /// The LearningAttempt (via recordLearningOutcome) this rating was given for — never a second, parallel evidence path (spec §9, §21).
+  attemptId String @unique
+
+  reviewedAt DateTime @default(now())
+
+  reviewItem ReviewItem      @relation(fields: [reviewItemId], references: [id], onDelete: Cascade)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concept    Concept         @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  attempt    LearningAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([reviewItemId])
+  @@index([userId, reviewedAt])
+  @@map("review_events")
 }
 
 // ---------------------------------------------------------------------------

@@ -4,11 +4,11 @@ An adaptive AI tutor that builds a persistent model of what a student knows,
 diagnoses gaps, and chooses the next best learning action — not a chatbot
 with PDFs attached.
 
-This repo is built in phases (see `PHASES.md` for status). **Phases 1–8
+This repo is built in phases (see `PHASES.md` for status). **Phases 1–9
 (foundation, course ingestion, knowledge graph, student knowledge model,
 Active Recall, adaptive engine, intelligent tutor, exam & assessment
-engine) are complete**; the remaining study modes described in the full
-product spec ship in later phases.
+engine, spaced repetition) are complete**; the remaining study modes
+described in the full product spec ship in later phases.
 
 ## Stack
 
@@ -608,6 +608,98 @@ against the running server and real Postgres, including readiness's real
 numbers and the orphan-cleanup behavior itself; only question
 generation/rubric grading need the missing key.
 
+## Spaced repetition (Phase 9)
+
+A deterministic review scheduler (`src/lib/review/`) that answers four
+questions the same way every time, from persisted data alone: what's due,
+when it's next due, why, and what happens after a review. Claude is never
+involved in any of it — no scheduling decision in this phase makes an AI
+call.
+
+**`ReviewItem` / `ReviewEvent`.** `ReviewItem` is the persistent schedule —
+one row per (student, concept), lazily created (mirroring
+`StudentConceptMastery`) the first time a concept has real learning
+exposure, never pre-populated for a whole course up front. `ReviewEvent` is
+its append-only history: every completed review creates one row and no row
+is ever updated or deleted. Both replace the unused Phase 1 `Review` stub,
+which conflated a schedule and a single event and had no history table.
+
+**The scheduler (`scheduler.ts`).** `scheduleReview({ reviewItem, outcome,
+studentMastery, recentPerformance, now })` is a pure function returning the
+new `{ status, interval, stability, difficulty, repetitionCount,
+lapseCount, nextReviewAt }`. It folds in every factor the spec asks for:
+the item's own previous interval/stability, the self-rated AGAIN/HARD/GOOD/
+EASY outcome (AGAIN shrinks stability and forces a next-day review; HARD/
+GOOD/EASY grow it by increasing multipliers), a 1-5 difficulty estimate
+that shifts with each rating and slows or speeds future growth, repetition
+count (drives graduation from LEARNING to REVIEW after two consecutive
+successes) and lapse count (cumulative, never decremented), plus current
+mastery and recent recall performance from the Student Knowledge Model as
+bounded supporting signals — real inputs, but never able to override what
+the outcome rating itself says. Every constant lives in `config.ts`.
+
+**Due/overdue (`review-queries.ts`).** `isDue()`/`overdueDays()` are the
+one canonical definition of "due" — `getDueReviews()`, the adaptive engine
+integration, and the UI all call through them rather than recomputing due
+state independently. `getReviewState()` returns the `{ dueCount,
+overdueCount, nextReviewAt, reviewStreak }` the UI needs; `reviewStreak` is
+computed from real `ReviewEvent` rows (consecutive reviewed days), not a
+vanity number.
+
+**Reuse over duplication.** A review session is a `StudySession` in a new
+`REVIEW` mode — not a parallel session model. Question generation reuses
+Active Recall's own `getOrGenerateQuestion` (fixed at RECALL type, since
+review is pure retrieval practice); answering a review question calls the
+*existing* `/api/study-sessions/:id/answer` route completely unchanged,
+which still evaluates via Claude and still updates mastery through
+`recordLearningOutcome()` — Phase 9 never bypasses it or opens a second
+mastery-update path. The only genuinely new domain action is rating recall
+quality and rescheduling (`submitReviewRating`), which runs *after*
+`recordLearningOutcome()` has already recorded the evidence, matching the
+architecture the spec lays out: student action → evaluation →
+`recordLearningOutcome()` → student model → review scheduling.
+
+**Idempotency.** The evaluated `LearningAttempt` id created by the answer
+step is the natural idempotency key for the rating step — `ReviewEvent.
+attemptId` is unique. A duplicate rating request (double-click, retry)
+finds the existing event and returns it unchanged rather than rescheduling
+twice; a race between two concurrent requests is caught via the unique
+constraint itself, not just an up-front check.
+
+**Adaptive engine integration.** `getStudentLearningState` now also loads
+each concept's review due-state into an optional `reviewByConceptId` map;
+`calculateReviewUrgencyScore()` turns overdue days into a 0-1 signal that
+feeds directly into the *existing* `scoreReview()` action score alongside
+the pre-existing mastery-decay `forgettingRisk` — the stronger of the two
+wins. This is additive only: with no review data (the map is optional),
+`scoreReview()` behaves exactly as it did in Phase 6, so nothing about the
+existing adaptive engine changed for courses that never touch reviews.
+
+**Tutor integration.** A review answer that isn't `SUCCESS` shows a direct
+link into the existing Tutor in `REMEDIATION` mode for that concept — no
+remediation logic is duplicated; the Tutor still owns pedagogical
+intervention, the scheduler still owns scheduling.
+
+**Exam integration.** Exam evidence reaches the scheduler for free: exam
+grading already calls `recordLearningOutcome()` (Phase 8), which already
+writes to the same `KnowledgeEvidence`/`LearningAttempt`/`StudentMistake`
+tables the scheduler's `recentPerformance` input and the adaptive engine's
+existing mistake scoring read from. Phase 9 adds no exam-specific code —
+consuming existing evidence, not rewriting the exam engine, is the point.
+
+UI: a "Reviews" card on `/courses/:id/study` (due/overdue counts, streak,
+Start Review) and a `Review` link on the course page; `/courses/:id/review`
+runs the session — one question at a time, reusing the same answer/hint/
+reveal flow as Active Recall, followed by an AGAIN/HARD/GOOD/EASY rating
+step and a real, persisted-data session summary.
+
+**Known limitation:** same as Phases 3/5/6/7/8 — no live
+`ANTHROPIC_API_KEY` in this sandbox, so review question generation/
+evaluation could only be exercised via mocked-Claude integration tests
+against real Postgres, not a live end-to-end run. Every deterministic
+piece (scheduling, due/overdue, idempotency, the adaptive engine signal)
+was verified directly.
+
 ## Scripts
 
 | Script | Purpose |
@@ -626,18 +718,18 @@ generation/rubric grading need the missing key.
 ```
 src/
   app/
-    courses/                          Courses list, course/document/knowledge-graph/study/tutor/exam pages
+    courses/                          Courses list, course/document/knowledge-graph/study/tutor/exam/review pages
     concepts/[id]/                    Concept detail page
     api/courses, api/documents/,
     api/concepts/, api/study-sessions/,
     api/mistakes/, api/goals/,
     api/next-action/, api/tutor/,
-    api/exams/                         Route handlers (see API surfaces above)
+    api/exams/, api/review-sessions/   Route handlers (see API surfaces above)
   components/courses, documents/,
              knowledge/, study/, tutor/,
              exam/                      Client components (upload, delete, forms, graph viz,
                                         Active Recall session UI, adaptive dashboard, tutor chat,
-                                        exam runner/results/readiness/oral examiner)
+                                        exam runner/results/readiness/oral examiner, review runner)
   lib/
     ai/                Server-side Claude service (claude.ts), retry.ts, answer-evaluator.ts
       prompts/         Prompt templates + their Zod output schemas, kept out of components
@@ -654,6 +746,9 @@ src/
     exam/               exam-engine.ts, exam-orchestrator.ts, exam-blueprint.ts/-generator.ts/
                          -grader.ts, mistake-analyzer.ts, exam-readiness.ts, adaptive-exam.ts/
                          oral-exam.ts/scenario-exam.ts (Phase 8)
+    review/             scheduler.ts, review-queries.ts, review-orchestrator.ts (Phase 9 —
+                         deterministic spaced repetition, reuses Phase 5's session/question
+                         infrastructure rather than duplicating it)
     services/          Ownership-checked course/document/knowledge/student-knowledge/
                         learning-goals business logic
     storage/           Storage abstraction (local FS now, S3-compatible later)
