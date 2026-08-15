@@ -14,20 +14,21 @@ import { withRetry } from "@/lib/ai/retry";
 import { buildHintGenerationPrompt, HintGenerationSchema } from "@/lib/ai/prompts/hint-generation";
 import { evaluateAnswer, type AnswerEvaluationResult } from "@/lib/ai/answer-evaluator";
 import { recordLearningOutcome, type MistakeInput } from "./record-outcome";
-import { selectNextLearningTarget, type LearningTarget } from "./question-selector";
+import {
+  getNextLearningAction,
+  NextLearningActionSchema,
+  NoConceptsAvailableError,
+  type NextLearningAction,
+} from "./adaptive-engine";
 import { getOrGenerateQuestion } from "./question-generator";
-import { clampDifficulty } from "./difficulty-engine";
+import { clampDifficulty, selectDifficultyForConcept } from "./difficulty-engine";
+
+export { NoConceptsAvailableError };
 
 // ---------------------------------------------------------------------------
 // Errors — business-rule violations, distinct from "not found/not owned"
 // (those return null, matching the established service convention).
 // ---------------------------------------------------------------------------
-
-export class NoConceptsAvailableError extends Error {
-  constructor() {
-    super("This course has no knowledge graph yet — build it before starting Active Recall.");
-  }
-}
 
 export class SessionNotActiveError extends Error {
   constructor() {
@@ -101,19 +102,19 @@ async function nextPosition(sessionId: string): Promise<number> {
   return (last?.position ?? 0) + 1;
 }
 
-/** Generates/reuses a question for `target`, falling back to a plain RECALL @ difficulty 1 once if the first attempt is refused (spec §17: no complex remediation chains). */
-async function generateForTarget(
+/** Generates/reuses a question for the adaptive engine's chosen `action`, falling back to a plain RECALL @ difficulty 1 once if the first attempt is refused (spec §17: no complex remediation chains). */
+async function generateForAction(
   courseId: string,
   userId: string,
-  target: LearningTarget,
+  action: NextLearningAction,
   excludeQuestionIds: string[],
   purpose: "QUESTION_GENERATION" | "REMEDIATION",
 ): Promise<Question> {
   const primary = await getOrGenerateQuestion({
     courseId,
-    conceptId: target.conceptId,
-    type: target.questionType,
-    difficulty: target.suggestedDifficulty,
+    conceptId: action.conceptId,
+    type: action.suggestedQuestionType,
+    difficulty: action.difficulty,
     userId,
     purpose,
     excludeQuestionIds,
@@ -122,7 +123,7 @@ async function generateForTarget(
 
   const fallback = await getOrGenerateQuestion({
     courseId,
-    conceptId: target.conceptId,
+    conceptId: action.conceptId,
     type: "RECALL",
     difficulty: 1,
     userId,
@@ -164,20 +165,65 @@ export async function getOrStartSession(userId: string, courseId: string): Promi
     return getSessionState(existing.id, userId);
   }
 
-  const target = await selectNextLearningTarget({ userId, courseId });
-  if (!target) throw new NoConceptsAvailableError();
+  const { action } = await getNextLearningAction({ userId, courseId });
 
   // Generate the first question BEFORE creating the session row: if
   // generation fails (e.g. a transient Claude error), we must not leave an
   // orphaned ACTIVE session with zero questions behind — getOrStartSession
   // would then "resume" that broken session forever instead of letting the
   // student retry cleanly.
-  const question = await generateForTarget(courseId, userId, target, [], "QUESTION_GENERATION");
+  const question = await generateForAction(courseId, userId, action, [], "QUESTION_GENERATION");
 
   const session = await prisma.studySession.create({
     data: { userId, courseId, targetLength: env.DEFAULT_RECALL_SESSION_LENGTH },
   });
-  await createSessionQuestion(session.id, question.id, target.reason);
+  await createSessionQuestion(session.id, question.id, action.reason.message);
+
+  return getSessionState(session.id, userId);
+}
+
+/**
+ * "Study something else" (spec §30-31): starts a session on a
+ * student-chosen concept instead of the adaptive engine's recommendation.
+ * Bypasses the engine entirely rather than forcing it to justify the
+ * override — the recommendation was already shown and logged separately
+ * by the caller of getNextLearningAction(); this never punishes or blocks
+ * the override. Returns null if the course or concept isn't found/owned.
+ */
+export async function startSessionForConcept(userId: string, courseId: string, conceptId: string): Promise<SessionState | null> {
+  const course = await prisma.course.findFirst({ where: { id: courseId, userId } });
+  if (!course) return null;
+
+  const existing = await prisma.studySession.findFirst({
+    where: { userId, courseId, status: "ACTIVE" },
+    orderBy: { startedAt: "desc" },
+  });
+  if (existing) return getSessionState(existing.id, userId);
+
+  const concept = await prisma.concept.findFirst({
+    where: { id: conceptId, courseId },
+    select: { id: true, name: true, difficulty: true },
+  });
+  if (!concept) return null;
+
+  const difficulty = await selectDifficultyForConcept(userId, concept.id, concept.difficulty);
+  const action = NextLearningActionSchema.parse({
+    actionType: "ACTIVE_RECALL",
+    conceptId: concept.id,
+    conceptName: concept.name,
+    priority: 1,
+    difficulty,
+    suggestedQuestionType: "RECALL",
+    reason: { type: "GENERAL", message: `You chose to study ${concept.name} instead of the suggested concept.` },
+    factors: [],
+    estimatedDurationMinutes: 5,
+  });
+
+  const question = await generateForAction(courseId, userId, action, [], "QUESTION_GENERATION");
+  const session = await prisma.studySession.create({
+    data: { userId, courseId, targetLength: env.DEFAULT_RECALL_SESSION_LENGTH },
+  });
+  await createSessionQuestion(session.id, question.id, action.reason.message);
 
   return getSessionState(session.id, userId);
 }
@@ -505,14 +551,61 @@ export async function revealAnswer(params: {
 
 export interface NextQuestionResult {
   sessionQuestion: StudySessionQuestion & { question: Question & { concept: { name: string } } };
-  target: LearningTarget;
+  action: NextLearningAction;
+}
+
+/** Builds a direct, engine-bypassing retry action (spec §17) — "Try Again" is a user override of the recommendation, not a fresh adaptive decision, so it never touches AdaptiveDecisionLog. */
+async function buildRetryAction(
+  courseId: string,
+  previousConceptId: string,
+  previousDifficulty: number,
+  prerequisiteGapConceptId: string | null,
+): Promise<NextLearningAction> {
+  const targetConceptId = prerequisiteGapConceptId ?? previousConceptId;
+  const concept = await prisma.concept.findFirstOrThrow({
+    where: { id: targetConceptId, courseId },
+    select: { name: true },
+  });
+
+  const action: NextLearningAction = prerequisiteGapConceptId
+    ? {
+        actionType: "PREREQUISITE_REVIEW",
+        conceptId: prerequisiteGapConceptId,
+        conceptName: concept.name,
+        priority: 1,
+        difficulty: 2,
+        suggestedQuestionType: "RECALL",
+        reason: {
+          type: "PREREQUISITE_GAP",
+          message: `Your last answer suggested a gap in ${concept.name}, a prerequisite for the concept you were working on.`,
+        },
+        factors: [],
+        estimatedDurationMinutes: 5,
+      }
+    : {
+        actionType: "REMEDIATION",
+        conceptId: previousConceptId,
+        conceptName: concept.name,
+        priority: 1,
+        difficulty: clampDifficulty(previousDifficulty - 1),
+        suggestedQuestionType: "RECALL",
+        reason: { type: "GENERAL", message: `Let's try a more focused, easier question on ${concept.name}.` },
+        factors: [],
+        estimatedDurationMinutes: 5,
+      };
+
+  return NextLearningActionSchema.parse(action);
 }
 
 /**
  * Selects and generates the next question, reacting to the previous answer
- * (spec §29): a validated prerequisite gap from the last answer takes
- * priority; a "Try Again" targets the same concept one difficulty level
- * down; otherwise the selector picks fresh (spec §31).
+ * (spec §29, Phase 6 spec §33-36): a fresh, non-retry "next" always defers
+ * to the adaptive engine — it re-derives prerequisite gaps, weak concepts,
+ * forgetting risk etc. from current mastery data on every call, so it does
+ * not need the previous answer's one-off AI-flagged gap to redirect
+ * correctly (that signal already feeds mastery/mistakes, which the engine
+ * reads). "Try Again" is different: it's an explicit user request to redo
+ * *this* concept, easier — that bypasses the engine entirely (spec §17).
  */
 export async function nextQuestion(params: {
   sessionId: string;
@@ -534,39 +627,27 @@ export async function nextQuestion(params: {
     await prisma.studySessionQuestion.findMany({ where: { sessionId: session.id }, select: { questionId: true } })
   ).map((q) => q.questionId);
 
-  let target: LearningTarget | null = null;
+  let action: NextLearningAction;
   let purpose: "QUESTION_GENERATION" | "REMEDIATION" = "QUESTION_GENERATION";
 
   if (params.retry && previous) {
     purpose = "REMEDIATION";
-    const prerequisiteGapId = previous.answer?.prerequisiteGapConceptId ?? null;
-    target = await selectNextLearningTarget({
-      userId: params.userId,
-      courseId: session.courseId,
-      forceConceptId: prerequisiteGapId ?? previous.question.conceptId,
-    });
-    if (target && !prerequisiteGapId) {
-      // Same concept, one notch easier — a focused retry rather than the identical question (spec §17).
-      target = { ...target, suggestedDifficulty: clampDifficulty(previous.question.difficulty - 1) };
-    }
-  } else if (previous?.answer?.prerequisiteGapConceptId) {
-    target = await selectNextLearningTarget({
-      userId: params.userId,
-      courseId: session.courseId,
-      forceConceptId: previous.answer.prerequisiteGapConceptId,
-    });
+    action = await buildRetryAction(
+      session.courseId,
+      previous.question.conceptId,
+      previous.question.difficulty,
+      previous.answer?.prerequisiteGapConceptId ?? null,
+    );
   } else {
-    target = await selectNextLearningTarget({ userId: params.userId, courseId: session.courseId });
+    action = (await getNextLearningAction({ userId: params.userId, courseId: session.courseId })).action;
   }
 
-  if (!target) throw new NoConceptsAvailableError();
-
-  const question = await generateForTarget(session.courseId, params.userId, target, askedQuestionIds, purpose);
-  const sessionQuestion = await createSessionQuestion(session.id, question.id, target.reason);
+  const question = await generateForAction(session.courseId, params.userId, action, askedQuestionIds, purpose);
+  const sessionQuestion = await createSessionQuestion(session.id, question.id, action.reason.message);
 
   return {
-    sessionQuestion: { ...sessionQuestion, question: { ...question, concept: { name: target.conceptName } } },
-    target,
+    sessionQuestion: { ...sessionQuestion, question: { ...question, concept: { name: action.conceptName } } },
+    action,
   };
 }
 

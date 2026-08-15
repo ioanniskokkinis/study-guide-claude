@@ -54,10 +54,10 @@ export default async function CoursePage({ params }: PageProps) {
         </Link>
         {course.knowledgeStatus === "READY" && (
           <Link
-            href={`/courses/${course.id}/study/recall`}
+            href={`/courses/${course.id}/study`}
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
-            Active Recall
+            Study
           </Link>
         )}
       </div>

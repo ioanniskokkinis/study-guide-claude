@@ -36,8 +36,15 @@ each phase depends on the previous one's persisted data model.
       `recordLearningOutcome()` mastery updates, basic adaptive difficulty,
       prerequisite-aware next-question selection, hints, reveal-answer,
       and a session UI with progress/summary.
-- [ ] **Phase 6 — Adaptive engine.** Difficulty adjustment, prerequisite
-      remediation, weak-concept prioritization, "What should I study now?".
+- [x] **Phase 6 — Adaptive engine.** A centralized, deterministic (zero
+      Claude calls) "what should I study next?" decision layer: per-concept
+      weakness/prerequisite-blocking/recent-mistake/forgetting-risk/goal-
+      relevance/recency scoring, composed into ranked candidate actions
+      (ACTIVE_RECALL, REMEDIATION, PREREQUISITE_REVIEW, REVIEW, CHALLENGE)
+      with a human-readable explanation. Active Recall now sources its
+      question selection from this engine instead of its own logic; a new
+      `/courses/:id/study` dashboard surfaces the recommendation with an
+      accept/override choice and a real-data progress list.
 - [ ] **Phase 7 — Socratic + teach-back.**
 - [ ] **Phase 8 — Exams.** Diagnostic, written exam, exam simulation.
 - [ ] **Phase 9 — Spaced repetition.** Review scheduling.

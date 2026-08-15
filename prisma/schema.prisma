@@ -28,15 +28,17 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses           Course[]
-  masteries         StudentConceptMastery[]
-  answers           Answer[]
-  studentMistakes   StudentMistake[]
-  reviews           Review[]
-  aiUsageLogs       AiUsageLog[]
-  learningAttempts  LearningAttempt[]
-  knowledgeEvidence KnowledgeEvidence[]
-  studySessions     StudySession[]
+  courses              Course[]
+  masteries            StudentConceptMastery[]
+  answers              Answer[]
+  studentMistakes      StudentMistake[]
+  reviews              Review[]
+  aiUsageLogs          AiUsageLog[]
+  learningAttempts     LearningAttempt[]
+  knowledgeEvidence    KnowledgeEvidence[]
+  studySessions        StudySession[]
+  learningGoals        LearningGoal[]
+  adaptiveDecisionLogs AdaptiveDecisionLog[]
 
   @@map("users")
 }
@@ -69,11 +71,13 @@ model Course {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents     Document[]
-  concepts      Concept[]
-  questions     Question[]
-  studySessions StudySession[]
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents            Document[]
+  concepts             Concept[]
+  questions            Question[]
+  studySessions        StudySession[]
+  learningGoals        LearningGoal[]
+  adaptiveDecisionLogs AdaptiveDecisionLog[]
 
   @@index([userId])
   @@map("courses")
@@ -172,12 +176,13 @@ model Concept {
   relationshipsAsSource ConceptRelationship[] @relation("RelationshipSource")
   relationshipsAsTarget ConceptRelationship[] @relation("RelationshipTarget")
 
-  masteries         StudentConceptMastery[]
-  questions         Question[]
-  studentMistakes   StudentMistake[]
-  reviews           Review[]
-  learningAttempts  LearningAttempt[]
-  knowledgeEvidence KnowledgeEvidence[]
+  masteries            StudentConceptMastery[]
+  questions            Question[]
+  studentMistakes      StudentMistake[]
+  reviews              Review[]
+  learningAttempts     LearningAttempt[]
+  knowledgeEvidence    KnowledgeEvidence[]
+  adaptiveDecisionLogs AdaptiveDecisionLog[]
 
   // Prevents duplicate concepts within a course (spec §2, §11 dedup).
   @@unique([courseId, normalizedName])
@@ -649,6 +654,97 @@ model Review {
   @@index([userId, scheduledAt])
   @@index([conceptId])
   @@map("reviews")
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive learning engine (Phase 6)
+//
+// The engine itself (src/lib/learning/adaptive-engine.ts) is deterministic
+// and reads entirely from the models above (mastery, attempts, mistakes,
+// prerequisites) — nothing here duplicates that data. These two models
+// exist only for what didn't already have a home: a lightweight learning
+// goal a student can set, and an audit trail of what the engine decided
+// and why (spec §43-44), separate from WHY the underlying data looked the
+// way it did.
+// ---------------------------------------------------------------------------
+
+enum LearningGoalType {
+  EXAM
+  MASTER_COURSE
+  CERTIFICATION
+  GENERAL
+}
+
+model LearningGoal {
+  id               String           @id @default(cuid())
+  userId           String
+  courseId         String
+  type             LearningGoalType
+  /// Relevant for EXAM-type goals; drives the urgency curve in goal-relevance scoring (spec §16).
+  targetDate       DateTime?
+  /// Concept ids this goal specifically emphasizes; null/empty means "the whole course" (spec §15 — not a full calendar planner).
+  targetConceptIds Json?
+  priority         Int              @default(1)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([userId, courseId])
+  @@map("learning_goals")
+}
+
+/// Mirrors the adaptive engine's ActionType union (src/lib/learning/adaptive/types.ts).
+enum AdaptiveActionType {
+  ACTIVE_RECALL
+  REMEDIATION
+  PREREQUISITE_REVIEW
+  REVIEW
+  CHALLENGE
+  REST
+}
+
+/// Mirrors the adaptive engine's ReasonType union.
+enum AdaptiveReasonType {
+  PREREQUISITE_GAP
+  RECENT_MISTAKE
+  MISCONCEPTION
+  REPEATED_FAILURE
+  FORGETTING_RISK
+  WEAKNESS
+  GOAL_RELEVANCE
+  SUCCESS_STREAK
+  NO_DATA
+  GENERAL
+}
+
+/// One row per getNextLearningAction() call — enough to reconstruct what
+/// was recommended and why (spec §44), without storing raw scoring
+/// internals or anything AI-related (the engine makes zero Claude calls).
+/// `accepted` is set only for the small subset of calls that are genuine
+/// user-facing recommendation moments (the study dashboard's Start /
+/// Study-something-else buttons) — internal Active Recall continuations
+/// leave it null, since there's no separate accept/reject UX for those.
+model AdaptiveDecisionLog {
+  id            String             @id @default(cuid())
+  userId        String
+  courseId      String
+  conceptId     String
+  actionType    AdaptiveActionType
+  priority      Float
+  reasonType    AdaptiveReasonType
+  reasonMessage String
+  accepted      Boolean?
+  createdAt     DateTime           @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@index([userId, courseId])
+  @@index([createdAt])
+  @@map("adaptive_decision_logs")
 }
 
 // ---------------------------------------------------------------------------

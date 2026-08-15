@@ -4,9 +4,9 @@ An adaptive AI tutor that builds a persistent model of what a student knows,
 diagnoses gaps, and chooses the next best learning action — not a chatbot
 with PDFs attached.
 
-This repo is built in phases (see `PHASES.md` for status). **Phases 1–5
+This repo is built in phases (see `PHASES.md` for status). **Phases 1–6
 (foundation, course ingestion, knowledge graph, student knowledge model,
-Active Recall) are complete**; the remaining adaptive study modes
+Active Recall, adaptive engine) are complete**; the remaining study modes
 described in the full product spec ship in later phases.
 
 ## Stack
@@ -304,6 +304,80 @@ error with no orphaned session left behind, and the deterministic
 reveal→outcome→mastery→summary path (which needs no AI call) was
 exercised end-to-end against real Postgres.
 
+## Adaptive learning engine (Phase 6)
+
+Answers "given everything we know about this student, what's the
+highest-value thing to do next?" — deterministically. **Zero Claude calls**:
+every recommendation comes from PostgreSQL (mastery, attempts, mistakes,
+the prerequisite graph) run through composable scoring functions, not a
+model call. Claude stays scoped to *generating content* (Phase 5's question
+generation/evaluation); *deciding what to study* is plain arithmetic —
+cheaper, deterministic, and explainable.
+
+```
+src/lib/learning/adaptive/
+  student-state.ts     targeted queries -> StudentLearningState (spec §39,
+                        never "SELECT everything")
+  concept-scoring.ts   per-concept: weakness, prerequisite blocking
+                        (recursive, depth-limited, cycle-safe), prerequisite
+                        importance, recency/severity-weighted mistake
+                        pressure, a mastery-scaled forgetting-risk decay
+                        model, exam-goal urgency, recency/interleaving
+                        penalty -> combined into one 0-1 concept value
+  action-scoring.ts    per-action-type: scoreActiveRecall/scoreRemediation/
+                        scorePrerequisiteReview/scoreReview/scoreChallenge,
+                        each 0-1 — repeated-failure and success-streak
+                        windows, and a severe-misconception override that
+                        beats even high stale mastery (spec §22)
+adaptive-engine.ts      composes the above: getStudentState ->
+                        calculateConceptScores -> generateCandidateActions
+                        -> rankActions -> explainDecision -> the single
+                        entry point, getNextLearningAction()
+```
+
+A `PREREQUISITE_REVIEW` candidate's concept is deliberately the *weak
+prerequisite*, not the concept that triggered it — recursively found up to
+5 levels up the graph, redirecting effort to the actual bottleneck (the
+TCP/IP → TCP → Ports → Firewalls → Network Attacks chain: if Firewalls is
+weak because Ports is weaker still, the recommendation is Ports). Every
+call is logged to `AdaptiveDecisionLog` for later recommendation → action →
+outcome analysis; `accepted` is set only at genuine recommendation moments
+(the study dashboard's Start / Study-something-else), not on every internal
+Active Recall continuation.
+
+Active Recall (Phase 5) no longer has its own concept-selection logic — it
+calls `getNextLearningAction()` for both session start and "Next Question."
+"Try Again" is the one deliberate exception: it's a direct user request to
+redo *this* concept, easier, so it bypasses the engine rather than asking
+it to justify an override.
+
+API surface:
+
+```
+GET   /api/courses/:id/next-action     the current recommendation (deterministic, logged)
+PATCH /api/next-action/:decisionLogId  { accepted: boolean } — never forces or punishes an override
+GET   /api/courses/:id/goals           list learning goals
+POST  /api/courses/:id/goals           create a goal (EXAM/MASTER_COURSE/CERTIFICATION/GENERAL)
+DELETE /api/goals/:id                  remove a goal
+```
+
+UI: `/courses/:id/study` — the main study dashboard (linked from the course
+page's "Study" button once its knowledge graph is ready). Shows the Next
+Best Action with an expandable "Why?" breakdown, an exam-date quick-setter,
+a real-data progress list, and "Study something else" to pick any concept
+directly instead.
+
+**Known limitation:** same as Phases 3/5 — no live `ANTHROPIC_API_KEY` in
+this sandbox, but the engine itself makes no AI calls at all, so it was
+fully verified live against the running server and real Postgres,
+including the exact TCP/IP→TCP→Ports→Firewalls→Network Attacks scenario
+from the spec (Ports recommended first via `PREREQUISITE_REVIEW` →
+improves → Firewalls becomes the target → three failures trigger
+`REMEDIATION` → a fresh Ports failure re-triggers `PREREQUISITE_REVIEW`).
+Only the downstream question-generation/evaluation step (unchanged from
+Phase 5) needs the missing key, and it still fails cleanly (502, no
+orphaned session).
+
 ## Scripts
 
 | Script | Purpose |
@@ -322,14 +396,15 @@ exercised end-to-end against real Postgres.
 ```
 src/
   app/
-    courses/                          Courses list, course/document/knowledge-graph/recall pages
+    courses/                          Courses list, course/document/knowledge-graph/study pages
     concepts/[id]/                    Concept detail page
     api/courses, api/documents/,
     api/concepts/, api/study-sessions/,
-    api/mistakes/                     Route handlers (see API surfaces above)
+    api/mistakes/, api/goals/,
+    api/next-action/                  Route handlers (see API surfaces above)
   components/courses, documents/,
              knowledge/, study/        Client components (upload, delete, forms, graph viz,
-                                        Active Recall session UI)
+                                        Active Recall session UI, adaptive dashboard)
   lib/
     ai/                Server-side Claude service (claude.ts), retry.ts, answer-evaluator.ts
       prompts/         Prompt templates + their Zod output schemas, kept out of components
@@ -339,9 +414,10 @@ src/
     knowledge/          concept-extractor/normalizer, relationship/prerequisite extractors,
                          graph-validator, graph-layout, persist.ts, knowledge-builder.ts
     learning/           mastery-engine.ts, confidence-calibrator.ts, record-outcome.ts (Phase 4);
-                         difficulty-engine.ts, question-selector.ts, question-generator.ts,
-                         study-session.ts (Phase 5 — Active Recall orchestration)
-    services/          Ownership-checked course/document/knowledge/student-knowledge business logic
+                         difficulty-engine.ts, question-generator.ts, study-session.ts (Phase 5);
+                         adaptive-engine.ts + adaptive/ (Phase 6 — deterministic decision engine)
+    services/          Ownership-checked course/document/knowledge/student-knowledge/
+                        learning-goals business logic
     storage/           Storage abstraction (local FS now, S3-compatible later)
     rate-limit.ts      Simple in-memory per-user rate limiter for AI-calling routes
     env.ts             Validated environment configuration
