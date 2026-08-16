@@ -5,6 +5,7 @@ import { findOwnedCourse } from "@/lib/services/courses";
 import { getCourseMastery } from "@/lib/services/student-knowledge";
 import { TutorChat } from "@/components/tutor/TutorChat";
 import { TUTOR_MODES, type TutorModeValue } from "@/lib/tutor/types";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,7 @@ export default async function TutorPage({ params, searchParams }: PageProps) {
             conceptName={selected.conceptName}
             initialMastery={selected.overallMastery}
             mode={isTutorMode(mode) ? mode : "SOCRATIC"}
+            ttsEnabled={env.TTS_ENABLED}
           />
         </div>
       )}

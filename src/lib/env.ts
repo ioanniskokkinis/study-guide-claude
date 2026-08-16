@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+/**
+ * `z.coerce.boolean()` is a classic trap for env vars — `Boolean("false")`
+ * is `true`, since any non-empty string is truthy. This treats the raw
+ * string literally: only `"true"` (case-insensitive) becomes `true`;
+ * anything else (including `"false"`, empty, or unset) becomes `false`.
+ */
+function booleanEnv(defaultValue: boolean) {
+  return z.preprocess((v) => (typeof v === "string" ? v.toLowerCase() === "true" : v), z.boolean()).default(defaultValue);
+}
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   ANTHROPIC_API_KEY: z.string().optional(),
@@ -43,6 +53,19 @@ const envSchema = z.object({
   // than AI_CONTEXT_RECENT_MESSAGES is replaced by a deterministic (non-AI)
   // summary instead of being silently dropped — see src/lib/tutor/context.ts.
   AI_CONTEXT_MAX_MESSAGES: z.coerce.number().int().positive().default(12),
+  // Phase 14 (TTS / Voice Tutor) — off by default. With TTS_ENABLED=false,
+  // no provider is ever constructed and no TTS request is ever made (see
+  // src/lib/tts/tts.ts) — the text Tutor works completely unaffected.
+  TTS_ENABLED: booleanEnv(false),
+  TTS_PROVIDER: z.enum(["openai"]).default("openai"),
+  TTS_MODEL: z.string().default("tts-1"),
+  TTS_VOICE: z.string().default("alloy"),
+  // Server-side only. Never expose this to the browser (no NEXT_PUBLIC_ prefix) — mirrors ANTHROPIC_API_KEY's own handling.
+  TTS_API_KEY: z.string().optional(),
+  // Generated audio is stored separately from uploaded course documents (STORAGE_ROOT) — a different root, same StorageProvider implementation.
+  AUDIO_STORAGE_ROOT: z.string().default("./storage/audio"),
+  // A Tutor message's cleaned speech text longer than this is split at sentence boundaries (spec §13) rather than sent to the provider in one huge request or silently truncated.
+  TTS_MAX_CHARACTERS: z.coerce.number().int().positive().default(2000),
 });
 
 export type Env = z.infer<typeof envSchema>;

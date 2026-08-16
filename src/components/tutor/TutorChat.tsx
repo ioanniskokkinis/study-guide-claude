@@ -32,6 +32,9 @@ type StreamingKind = "opening" | "message" | "hint" | null;
 
 type LastAction = { kind: "message"; text: string; confidence: "CONFIDENT" | "UNSURE" | "GUESSING" | null } | { kind: "hint" } | null;
 
+/** Phase 14 §8 — the audio playback state machine, one active message at a time across the whole chat. */
+type AudioStatus = "idle" | "loading" | "playing" | "paused" | "error";
+
 function toDisplayMessage(m: RawTutorMessage): DisplayMessage {
   return { id: m.id, role: m.role, content: m.content, messageType: m.messageType };
 }
@@ -61,9 +64,203 @@ const MESSAGE_TYPE_LABEL: Partial<Record<string, string>> = {
   HINT: "Hint",
 };
 
+/**
+ * Drives Play/Pause/Stop for Tutor message audio (Phase 14 §7-9, §13, §19).
+ * A single `<audio>` element is shared across the whole chat so starting one
+ * message's audio always stops any other (spec §8 — only one plays at a
+ * time). Long responses are split server-side into parts (spec §13); on
+ * `ended`, if more parts remain for the same message, the next part is
+ * fetched and chained automatically so playback is seamless without ever
+ * doing sentence-level live streaming (explicitly deferred, spec §14).
+ */
+function useTutorAudioPlayer(enabled: boolean) {
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const activeMessageIdRef = useRef<string | null>(null);
+  const partRef = useRef(0);
+  const totalPartsRef = useRef(1);
+  const epochRef = useRef(0);
+
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [status, setStatus] = useState<AudioStatus>("idle");
+
+  async function fetchAndPlayPart(messageId: string, part: number, epoch: number) {
+    try {
+      const response = await fetch("/api/tutor/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, part }),
+      });
+      if (epochRef.current !== epoch) return;
+      if (!response.ok) {
+        setStatus("error");
+        return;
+      }
+      totalPartsRef.current = Number(response.headers.get("X-Tts-Total-Parts") ?? "1") || 1;
+      partRef.current = part;
+
+      const blob = await response.blob();
+      if (epochRef.current !== epoch) return;
+
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      objectUrlRef.current = url;
+
+      const audio = audioElRef.current;
+      if (!audio) return;
+      audio.src = url;
+      await audio.play();
+      if (epochRef.current !== epoch) return;
+      setStatus("playing");
+    } catch {
+      if (epochRef.current !== epoch) return;
+      setStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    if (!enabled) return;
+    const audio = new Audio();
+    audioElRef.current = audio;
+
+    function onEnded() {
+      const messageId = activeMessageIdRef.current;
+      if (!messageId) return;
+      if (partRef.current + 1 < totalPartsRef.current) {
+        void fetchAndPlayPart(messageId, partRef.current + 1, epochRef.current);
+      } else {
+        setStatus("idle");
+        setPlayingMessageId(null);
+        activeMessageIdRef.current = null;
+      }
+    }
+    function onError() {
+      setStatus("error");
+    }
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
+    return () => {
+      audio.pause();
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+    };
+  }, [enabled]);
+
+  function play(messageId: string) {
+    const epoch = ++epochRef.current;
+    activeMessageIdRef.current = messageId;
+    partRef.current = 0;
+    totalPartsRef.current = 1;
+    setPlayingMessageId(messageId);
+    setStatus("loading");
+    void fetchAndPlayPart(messageId, 0, epoch);
+  }
+
+  function pause() {
+    audioElRef.current?.pause();
+    setStatus("paused");
+  }
+
+  function resume() {
+    void audioElRef.current?.play();
+    setStatus("playing");
+  }
+
+  function stop() {
+    epochRef.current++;
+    audioElRef.current?.pause();
+    if (audioElRef.current) audioElRef.current.currentTime = 0;
+    activeMessageIdRef.current = null;
+    setStatus("idle");
+    setPlayingMessageId(null);
+  }
+
+  function toggle(messageId: string) {
+    if (playingMessageId === messageId) {
+      if (status === "playing") pause();
+      else if (status === "paused") resume();
+      else if (status === "error") play(messageId);
+      // "loading" — a click is a no-op (button is disabled while loading).
+    } else {
+      play(messageId);
+    }
+  }
+
+  return { playingMessageId, status, toggle, stop };
+}
+
+/** Accessible Play/Pause/Stop control for one Tutor message (Phase 14 §7-8, §17-18). State is always conveyed in the button's text, never by icon alone. */
+function AudioControl({
+  status,
+  onToggle,
+  onStop,
+}: {
+  status: AudioStatus;
+  onToggle: () => void;
+  onStop: () => void;
+}) {
+  const isLoading = status === "loading";
+  const isPlaying = status === "playing";
+  const isPaused = status === "paused";
+  const isError = status === "error";
+
+  const label = isLoading
+    ? "Loading Tutor response audio"
+    : isPlaying
+      ? "Pause Tutor response"
+      : isPaused
+        ? "Resume Tutor response"
+        : isError
+          ? "Retry Tutor response audio"
+          : "Play Tutor response";
+  const text = isLoading ? "Loading…" : isPlaying ? "⏸ Pause" : isPaused ? "▶ Resume" : isError ? "↻ Retry" : "▶ Listen";
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={isLoading}
+        aria-label={label}
+        className="inline-flex min-h-[32px] items-center gap-1 rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+      >
+        {text}
+      </button>
+      {(isPlaying || isPaused) && (
+        <button
+          type="button"
+          onClick={onStop}
+          aria-label="Stop Tutor response"
+          className="min-h-[32px] px-1 text-xs text-zinc-400 underline-offset-2 hover:underline"
+        >
+          Stop
+        </button>
+      )}
+      {isError && <span className="text-xs text-red-500 dark:text-red-400">Couldn&rsquo;t play audio.</span>}
+    </div>
+  );
+}
+
 /** One conversation bubble — memoized so a streaming placeholder's frequent re-renders never re-parse/re-render already-settled messages (Phase 13 §15). */
-const MessageBubble = memo(function MessageBubble({ message }: { message: DisplayMessage }) {
+const MessageBubble = memo(function MessageBubble({
+  message,
+  ttsEnabled,
+  audioStatus,
+  onToggleAudio,
+  onStopAudio,
+}: {
+  message: DisplayMessage;
+  ttsEnabled: boolean;
+  audioStatus: AudioStatus;
+  onToggleAudio: (messageId: string) => void;
+  onStopAudio: () => void;
+}) {
   const label = message.messageType ? MESSAGE_TYPE_LABEL[message.messageType] : undefined;
+  const canListen = ttsEnabled && message.role === "TUTOR";
   return (
     <div className={message.role === "STUDENT" ? "flex justify-end" : "flex justify-start"}>
       <div
@@ -75,6 +272,9 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: Displa
       >
         {label && <p className="mb-1 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">{label}</p>}
         {message.role === "STUDENT" ? <p className="whitespace-pre-wrap">{message.content}</p> : renderSafeMarkdown(message.content)}
+        {canListen && (
+          <AudioControl status={audioStatus} onToggle={() => onToggleAudio(message.id)} onStop={onStopAudio} />
+        )}
       </div>
     </div>
   );
@@ -116,12 +316,15 @@ export function TutorChat({
   conceptName,
   initialMastery,
   mode,
+  ttsEnabled = false,
 }: {
   courseId: string;
   conceptId: string;
   conceptName: string;
   initialMastery: number;
   mode: SessionInfo["mode"];
+  /** Phase 14 §3/§26 — when false (the default; TTS is opt-in server-side), no audio controls render and no TTS request is ever made. */
+  ttsEnabled?: boolean;
 }) {
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [input, setInput] = useState("");
@@ -138,6 +341,8 @@ export function TutorChat({
   const isNearBottomRef = useRef(true);
   /** Bumped on every new stream; a callback that finds it's no longer current knows a newer stream has superseded it and drops its update (Phase 13 §8 — guards stale/duplicate completion and one stream overwriting another). */
   const streamEpochRef = useRef(0);
+
+  const audioPlayer = useTutorAudioPlayer(ttsEnabled);
 
   const sending = streamPhase === "connecting" || streamPhase === "streaming";
 
@@ -374,7 +579,14 @@ export function TutorChat({
 
       <div ref={scrollContainerRef} onScroll={handleScroll} className="max-h-96 space-y-3 overflow-y-auto px-4 py-4">
         {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            ttsEnabled={ttsEnabled}
+            audioStatus={audioPlayer.playingMessageId === m.id ? audioPlayer.status : "idle"}
+            onToggleAudio={audioPlayer.toggle}
+            onStopAudio={audioPlayer.stop}
+          />
         ))}
         <StreamingBubble phase={streamPhase} kind={streamingKind} text={streamingText} />
         <div ref={messagesEndRef} />

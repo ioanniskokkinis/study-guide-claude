@@ -44,6 +44,7 @@ model User {
   examAnswers           ExamAnswer[]
   reviewItems           ReviewItem[]
   reviewEvents          ReviewEvent[]
+  ttsUsageLogs          TtsUsageLog[]
 
   @@map("users")
 }
@@ -971,6 +972,7 @@ model TutorMessage {
   createdAt   DateTime         @default(now())
 
   session TutorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  audio   TutorMessageAudio[]
 
   @@index([sessionId])
   @@map("tutor_messages")
@@ -1305,4 +1307,63 @@ model AiUsageLog {
   @@index([sessionId])
   @@index([requestType])
   @@map("ai_usage_logs")
+}
+
+/// Phase 14 (TTS): usage/cost observability for speech synthesis, kept
+/// deliberately separate from AiUsageLog rather than shoehorned into it —
+/// TTS is billed per character, not per token, and has no natural
+/// "inputTokens/outputTokens" shape, and spec §20 explicitly requires TTS
+/// cost never be mixed into Claude token totals. `messageId` is a plain
+/// string (not a relation) for the same cross-cutting-log reason
+/// AiUsageLog's `sessionId` is — this log must survive if the underlying
+/// TutorMessage is ever deleted.
+model TtsUsageLog {
+  id               String   @id @default(cuid())
+  userId           String?
+  sessionId        String?
+  messageId        String?
+  provider         String
+  model            String
+  voice            String
+  characterCount   Int
+  estimatedCostUsd Float
+  latencyMs        Int?
+  /// True when this request was served from TutorMessageAudio instead of calling the provider (spec §9/§20-21).
+  cacheHit         Boolean  @default(false)
+  success          Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([messageId])
+  @@index([createdAt])
+  @@map("tts_usage_logs")
+}
+
+/// Persistent audio cache (spec §9) — one row per (message, voice, model,
+/// exact text synthesized). Keyed by `textHash` rather than trusting
+/// `messageId` alone, since a persisted TutorMessage's content is treated
+/// here as *potentially* revisable even though nothing in this codebase
+/// currently mutates one after creation — a changed message can never
+/// silently serve stale audio. `storageKey` points into `audioStorage`
+/// (src/lib/storage/audio-storage.ts), never a public URL.
+model TutorMessageAudio {
+  id             String   @id @default(cuid())
+  messageId      String
+  voice          String
+  provider       String
+  model          String
+  textHash       String
+  storageKey     String
+  format         String
+  characterCount Int
+  createdAt      DateTime @default(now())
+
+  message TutorMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, voice, model, textHash])
+  @@index([messageId])
+  @@map("tutor_message_audio")
 }

@@ -205,3 +205,45 @@ each phase depends on the previous one's persisted data model.
       `dangerouslySetInnerHTML` — so literal HTML in model output is always
       inert text, and unterminated constructs during streaming fall back to
       plain text instead of crashing or producing malformed markup.
+- [x] **Phase 14 — TTS / Voice Tutor.** A purely additive audio layer on top
+      of the existing text Tutor — no second Tutor, no change to
+      `TutorEngine`/persistence/streaming, and the app works completely
+      normally with TTS off (`TTS_ENABLED=false`, the default). A vendor-
+      neutral `TTSProvider` interface (`src/lib/tts/provider.ts`) is
+      implemented once, via raw `fetch()` (no new SDK dependency, same
+      "smallest necessary dependency" precedent as Phase 11/13), by
+      `OpenAiTtsProvider`. Synthesis is entirely on-demand:
+      `synthesizeTutorMessage()` (`src/lib/tts/tutor-message-tts.ts`) only
+      ever runs after a `TutorMessage` has already streamed and persisted
+      (Phase 11/13), so TTS can never add latency to the Tutor's text
+      response. Authorization is derived from the message's own
+      `session.userId` relation — a client never supplies a session id to
+      check against. Text sent to the provider is only the message's own
+      content, run through a deterministic (non-AI) Markdown-to-speech
+      cleaner (`src/lib/tts/text-cleaning.ts`) that strips headings,
+      emphasis, code fences, links, citation lines, and list syntax into
+      natural spoken sentences. Long responses are split at sentence (and,
+      as a fallback, word) boundaries (`src/lib/tts/chunking.ts`) rather
+      than silently truncated, with `part`/`totalParts` communicated via
+      response headers so the client can auto-chain playback. Generated
+      audio is cached in a new `TutorMessageAudio` table, keyed by
+      `messageId + voice + model + textHash` — never by `messageId` alone
+      — so a changed message can never serve stale audio, and a cache-read
+      failure (e.g. a missing file) falls back to regeneration instead of
+      failing the request. Audio is stored via a second
+      `LocalStorageProvider` instance rooted at `AUDIO_STORAGE_ROOT`
+      (`src/lib/storage/audio-storage.ts`), separate from uploaded course
+      documents, and the API route (`POST /api/tutor/tts`) returns raw
+      audio bytes — never a JSON envelope with a storage path. Cost/usage
+      is tracked in a new `TtsUsageLog` table (character-based, not
+      token-based) kept deliberately separate from `AiUsageLog`, with
+      `src/lib/tts/usage-aggregation.ts` providing the same category of
+      reusable summary/breakdown queries Phase 12 built for Claude usage.
+      `TutorChat.tsx` gained a simple Play/Pause/Stop control per Tutor
+      message, driven by an idle/loading/playing/paused/error state
+      machine with a single shared `<audio>` element so starting one
+      message's audio always stops any other; state is always conveyed in
+      the button's text, never by icon alone, and playback is never
+      auto-started. A TTS failure never alters Tutor session state or
+      leaves the text response unreadable — the message stays fully
+      visible with a small retry affordance.
