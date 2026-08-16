@@ -493,25 +493,48 @@ export interface TutorSessionResult {
   messages: TutorMessage[];
 }
 
+interface PreparedSessionStart {
+  session: TutorSession;
+  ctx: TutorContext;
+  result: DecisionResult;
+  startMastery: number | null;
+}
+
+export type SessionStartOutcome = { kind: "resumed"; result: TutorSessionResult } | { kind: "prepared"; prepared: PreparedSessionStart };
+
 /**
- * Starts a new tutor session on `conceptId` (spec §42), or resumes an
- * already-active one for the same (user, course, concept) so a page
- * refresh or repeat visit continues the same conversation instead of
- * silently spawning a duplicate (spec §20/§31).
+ * Resolves what starting a Tutor session on `conceptId` should do next
+ * (spec §42, §20/§31): resume an already-active session that already has
+ * its opening message, or prepare to generate one. Exported so the
+ * streaming route can branch on this *before* deciding whether to open an
+ * SSE stream at all — a resume has nothing to generate, so it must never
+ * be sent as a fabricated stream (spec §6/§19 — the resume path is a plain
+ * DB read and stays a plain JSON response).
+ *
+ * A session found with zero messages is treated as needing generation too,
+ * reusing that row rather than creating a second one, instead of the plain
+ * "existing session -> return early" shortcut this function replaces. That
+ * case is only reachable now that streaming makes cancellation possible: a
+ * student who aborts before the opening question finishes generating would
+ * otherwise leave behind a session with no messages, which a later visit
+ * would silently "resume" into an empty, stuck conversation (Phase 13).
  */
-export async function startTutorSession(params: {
+export async function prepareTutorSessionStart(params: {
   userId: string;
   courseId: string;
   conceptId: string;
   mode: TutorModeValue;
-}): Promise<TutorSessionResult> {
+}): Promise<SessionStartOutcome> {
   const existing = await prisma.tutorSession.findFirst({
     where: { userId: params.userId, courseId: params.courseId, conceptId: params.conceptId, status: "ACTIVE" },
     orderBy: { startedAt: "desc" },
   });
   if (existing) {
     const messages = await prisma.tutorMessage.findMany({ where: { sessionId: existing.id }, orderBy: { createdAt: "asc" } });
-    return { session: existing, messages };
+    if (messages.length > 0) {
+      return { kind: "resumed", result: { session: existing, messages } };
+    }
+    // Orphaned from a cancelled/failed prior start — fall through and (re)generate its opening message below.
   }
 
   const startMastery = await getMastery(params.userId, params.conceptId);
@@ -523,15 +546,17 @@ export async function startTutorSession(params: {
   });
   if (!ctx) throw new ConceptNotFoundError();
 
-  const session = await prisma.tutorSession.create({
-    data: {
-      userId: params.userId,
-      courseId: params.courseId,
-      conceptId: params.conceptId,
-      mode: params.mode,
-      difficulty: ctx.currentDifficulty,
-    },
-  });
+  const session =
+    existing ??
+    (await prisma.tutorSession.create({
+      data: {
+        userId: params.userId,
+        courseId: params.courseId,
+        conceptId: params.conceptId,
+        mode: params.mode,
+        difficulty: ctx.currentDifficulty,
+      },
+    }));
 
   const result = TutorEngine.decide({
     ctx,
@@ -541,13 +566,15 @@ export async function startTutorSession(params: {
     explicitRevealRequest: false,
   });
 
-  const { content, metadata, aiCallMade } = await generateContent({
-    decision: result.decision,
-    ctx,
-    bookkeepingAfter: result.bookkeeping,
-    userId: params.userId,
-    sessionId: session.id,
-  });
+  return { kind: "prepared", prepared: { session, ctx, result, startMastery: startMastery?.overallMastery ?? null } };
+}
+
+async function finalizeSessionStart(
+  prepared: PreparedSessionStart,
+  generated: { content: string; metadata: Record<string, unknown>; aiCallMade: boolean },
+): Promise<TutorSessionResult> {
+  const { session, result, startMastery } = prepared;
+  const { content, metadata, aiCallMade } = generated;
 
   const [updatedSession, message] = await prisma.$transaction([
     prisma.tutorSession.update({
@@ -567,13 +594,114 @@ export async function startTutorSession(params: {
           ...metadata,
           action: result.decision.action,
           reason: result.decision.reason,
-          startMastery: startMastery?.overallMastery ?? 0,
+          startMastery: startMastery ?? 0,
         } as Prisma.InputJsonValue,
       },
     }),
   ]);
 
   return { session: updatedSession, messages: [message] };
+}
+
+/**
+ * Starts a new tutor session on `conceptId` (spec §42), or resumes an
+ * already-active one (spec §20/§31). Non-streaming — unchanged behavior
+ * from before Phase 13, now composed from `prepareTutorSessionStart`/
+ * `finalizeSessionStart` exactly like `submitTutorMessage` was in Phase 11.
+ */
+export async function startTutorSession(params: {
+  userId: string;
+  courseId: string;
+  conceptId: string;
+  mode: TutorModeValue;
+}): Promise<TutorSessionResult> {
+  const outcome = await prepareTutorSessionStart(params);
+  if (outcome.kind === "resumed") return outcome.result;
+
+  const { prepared } = outcome;
+  const generated = await generateContent({
+    decision: prepared.result.decision,
+    ctx: prepared.ctx,
+    bookkeepingAfter: prepared.result.bookkeeping,
+    userId: params.userId,
+    sessionId: prepared.session.id,
+  });
+  return finalizeSessionStart(prepared, generated);
+}
+
+/**
+ * Streaming counterpart of `startTutorSession`'s generation path (Phase 13
+ * §3) — only invoked once `prepareTutorSessionStart` has already determined
+ * there's something to generate (`kind: "prepared"`); the caller (the
+ * route) handles a `"resumed"` outcome itself, as plain JSON, before ever
+ * reaching this generator. `timing.decisionMs` is measured by the caller
+ * around its `prepareTutorSessionStart` call, since that work happens
+ * before this generator starts and therefore outside its own clock.
+ */
+export async function* streamTutorSessionStart(
+  prepared: PreparedSessionStart,
+  timing: { requestStartedAt: number; decisionMs: number },
+  signal?: AbortSignal,
+): AsyncGenerator<TutorStreamEvent, void, void> {
+  const { session, ctx, result } = prepared;
+  const aiGenerated = AI_GENERATED_ACTIONS.has(result.decision.action);
+
+  yield { type: "start", sessionId: session.id, action: result.decision.action, aiGenerated };
+
+  const generationStartedAt = Date.now();
+  let firstTokenAt: number | null = null;
+
+  let generated: { content: string; metadata: Record<string, unknown>; aiCallMade: boolean };
+  try {
+    const deltas = generateContentDeltas({
+      decision: result.decision,
+      ctx,
+      bookkeepingAfter: result.bookkeeping,
+      userId: session.userId,
+      sessionId: session.id,
+      signal,
+    });
+    let next = await deltas.next();
+    while (!next.done) {
+      if (firstTokenAt === null) firstTokenAt = Date.now();
+      yield { type: "delta", text: next.value };
+      next = await deltas.next();
+    }
+    generated = next.value;
+  } catch (error) {
+    if (signal?.aborted) return;
+    const isPartial = error instanceof MidStreamGenerationError && error.partialText.length > 0;
+    yield {
+      type: "error",
+      message: isPartial ? "The tutor's opening message was interrupted. Please try again." : "Could not start the tutor. Please try again.",
+    };
+    return;
+  }
+
+  if (signal?.aborted) return;
+
+  const generationCompletedAt = Date.now();
+  if (firstTokenAt === null) firstTokenAt = generationCompletedAt; // non-AI action — no deltas were ever emitted.
+
+  const finalResult = await finalizeSessionStart(prepared, generated);
+  const persistenceCompletedAt = Date.now();
+
+  const metrics: TutorLatencyMetrics = {
+    decisionMs: timing.decisionMs,
+    ttftMs: firstTokenAt - generationStartedAt,
+    generationMs: generationCompletedAt - generationStartedAt,
+    persistMs: persistenceCompletedAt - generationCompletedAt,
+    totalMs: persistenceCompletedAt - timing.requestStartedAt,
+  };
+  logTutorLatency({
+    sessionId: session.id,
+    action: result.decision.action,
+    model: aiGenerated ? resolveModelId(env.AI_MODEL_TUTOR_GENERATION) : "n/a",
+    metrics,
+  });
+
+  yield { type: "metadata", latency: metrics };
+  yield { type: "complete", session: finalResult.session, message: finalResult.messages[0] };
 }
 
 function bookkeepingToUpdateData(bookkeeping: SessionBookkeeping, decision: TutorDecision) {
@@ -958,8 +1086,17 @@ export async function getTutorSessionState(sessionId: string, userId: string): P
   return { session, messages };
 }
 
-/** Proactive hint request (spec §41 optional endpoint) — the student clicked "Hint" rather than typing "I don't know." */
-export async function requestTutorHint(sessionId: string, userId: string): Promise<TutorTurnResult> {
+interface PreparedHint {
+  session: TutorSession;
+  facts: ConceptFacts;
+  nextLevel: number;
+  isReveal: boolean;
+  action: "GIVE_HINT" | "GIVE_EXPLANATION";
+  tutorPrompt: string;
+}
+
+/** Everything a hint request needs before any language is generated — the hint counterpart of `prepareTurn` (Phase 13 §4). No TutorEngine call: escalating HINT_1→HINT_2→HINT_3→REVEAL is this endpoint's own fixed progression, not a decision TutorEngine makes (spec §22-23), and Phase 13 leaves that logic untouched. */
+async function prepareHint(sessionId: string, userId: string): Promise<PreparedHint> {
   const session = await prisma.tutorSession.findFirst({ where: { id: sessionId, userId } });
   if (!session) throw new TutorSessionNotFoundError();
   if (session.status !== "ACTIVE") throw new TutorSessionNotActiveError();
@@ -973,28 +1110,32 @@ export async function requestTutorHint(sessionId: string, userId: string): Promi
   });
   if (!ctx) throw new ConceptNotFoundError();
 
-  const nextLevel = Math.min(4, session.hintLevel + 1);
   const facts = toConceptFacts(ctx);
-  const tutorPrompt = lastTutorMessageContent(facts.conversationHistory);
-
-  let content: string;
-  let lastExplanationStrategy = session.lastExplanationStrategy;
+  const nextLevel = Math.min(4, session.hintLevel + 1);
   const isReveal = nextLevel >= 4;
-  const action = isReveal ? "GIVE_EXPLANATION" : "GIVE_HINT";
-  const messageMetadata: Record<string, unknown> = { action };
 
-  if (isReveal) {
-    const strategy = pickExplanationStrategy(session.lastExplanationStrategy);
-    const sourceChunks = await resolveSourceCitations(session.conceptId);
-    const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId, sessionId: session.id });
-    content = formatExplanation(explanation, sourceChunks);
-    lastExplanationStrategy = strategy;
-    messageMetadata.strategy = strategy;
+  return {
+    session,
+    facts,
+    nextLevel,
+    isReveal,
+    action: isReveal ? "GIVE_EXPLANATION" : "GIVE_HINT",
+    tutorPrompt: lastTutorMessageContent(facts.conversationHistory),
+  };
+}
+
+/** Persists exactly one TutorMessage plus hint bookkeeping — the hint counterpart of `finalizeTurn` (Phase 13 §4), shared by both the non-streaming and streaming hint paths. */
+async function finalizeHint(
+  prepared: PreparedHint,
+  generated: { content: string; strategy: string | null },
+): Promise<TutorTurnResult> {
+  const { session, nextLevel, isReveal, action } = prepared;
+  const messageMetadata: Record<string, unknown> = { action };
+  if (generated.strategy) {
+    messageMetadata.strategy = generated.strategy;
     messageMetadata.revealed = true;
   } else {
-    const level = nextLevel as 1 | 2 | 3;
-    content = await generateHint({ ...facts, level, tutorPrompt, userId, sessionId: session.id });
-    messageMetadata.hintLevel = level;
+    messageMetadata.hintLevel = nextLevel;
   }
 
   const [updatedSession, message] = await prisma.$transaction([
@@ -1003,7 +1144,7 @@ export async function requestTutorHint(sessionId: string, userId: string): Promi
       data: {
         hintLevel: nextLevel,
         answerRevealed: isReveal,
-        lastExplanationStrategy,
+        lastExplanationStrategy: generated.strategy ?? session.lastExplanationStrategy,
         currentStep: action,
         hintsUsedTotal: { increment: 1 },
         aiCallCount: { increment: 1 },
@@ -1013,7 +1154,7 @@ export async function requestTutorHint(sessionId: string, userId: string): Promi
       data: {
         sessionId: session.id,
         role: "TUTOR",
-        content,
+        content: generated.content,
         messageType: isReveal ? "EXPLANATION" : "HINT",
         metadata: messageMetadata as Prisma.InputJsonValue,
       },
@@ -1021,6 +1162,119 @@ export async function requestTutorHint(sessionId: string, userId: string): Promi
   ]);
 
   return { session: updatedSession, message };
+}
+
+/**
+ * Proactive hint request (spec §41 optional endpoint) — the student clicked
+ * "Hint" rather than typing "I don't know." Non-streaming — unchanged
+ * behavior from before Phase 13, now composed from `prepareHint`/
+ * `finalizeHint`.
+ */
+export async function requestTutorHint(sessionId: string, userId: string): Promise<TutorTurnResult> {
+  const prepared = await prepareHint(sessionId, userId);
+
+  if (prepared.isReveal) {
+    const strategy = pickExplanationStrategy(prepared.session.lastExplanationStrategy);
+    const sourceChunks = await resolveSourceCitations(prepared.session.conceptId);
+    const explanation = await generateExplanation({ ...prepared.facts, strategy, sourceChunks, userId, sessionId: prepared.session.id });
+    return finalizeHint(prepared, { content: formatExplanation(explanation, sourceChunks), strategy });
+  }
+
+  const level = prepared.nextLevel as 1 | 2 | 3;
+  const content = await generateHint({ ...prepared.facts, level, tutorPrompt: prepared.tutorPrompt, userId, sessionId: prepared.session.id });
+  return finalizeHint(prepared, { content, strategy: null });
+}
+
+/**
+ * Streaming counterpart of `requestTutorHint` (Phase 13 §4) — same
+ * TutorStreamEvent protocol as `streamTutorMessage`/`streamTutorSessionStart`,
+ * same generation infrastructure (`generateHintStream`/
+ * `generateExplanationStream`, already built in Phase 11), no new Claude
+ * call, no change to the hint-level progression above.
+ */
+export async function* streamTutorHint(sessionId: string, userId: string, signal?: AbortSignal): AsyncGenerator<TutorStreamEvent, void, void> {
+  const requestStartedAt = Date.now();
+
+  let prepared: PreparedHint;
+  try {
+    prepared = await prepareHint(sessionId, userId);
+  } catch (error) {
+    yield { type: "error", message: error instanceof Error ? error.message : "Something went wrong." };
+    return;
+  }
+  const decisionCompletedAt = Date.now();
+
+  if (signal?.aborted) return;
+
+  yield { type: "start", sessionId: prepared.session.id, action: prepared.action, aiGenerated: true };
+
+  const generationStartedAt = Date.now();
+  let firstTokenAt: number | null = null;
+  let strategy: string | null = null;
+  let content = "";
+
+  try {
+    if (prepared.isReveal) {
+      strategy = pickExplanationStrategy(prepared.session.lastExplanationStrategy);
+      const sourceChunks = await resolveSourceCitations(prepared.session.conceptId);
+      const deltas = generateExplanationStream({ ...prepared.facts, strategy, sourceChunks, userId, sessionId: prepared.session.id, signal });
+      let next = await deltas.next();
+      while (!next.done) {
+        if (firstTokenAt === null) firstTokenAt = Date.now();
+        yield { type: "delta", text: next.value };
+        next = await deltas.next();
+      }
+      content = next.value;
+      if (sourceChunks.length > 0) {
+        const suffix = sourceCitationSuffix(sourceChunks);
+        yield { type: "delta", text: suffix };
+        content += suffix;
+      }
+    } else {
+      const level = prepared.nextLevel as 1 | 2 | 3;
+      const deltas = generateHintStream({ ...prepared.facts, level, tutorPrompt: prepared.tutorPrompt, userId, sessionId: prepared.session.id, signal });
+      let next = await deltas.next();
+      while (!next.done) {
+        if (firstTokenAt === null) firstTokenAt = Date.now();
+        yield { type: "delta", text: next.value };
+        next = await deltas.next();
+      }
+      content = next.value;
+    }
+  } catch (error) {
+    if (signal?.aborted) return;
+    const isPartial = error instanceof MidStreamGenerationError && error.partialText.length > 0;
+    yield {
+      type: "error",
+      message: isPartial ? "The hint was interrupted. Please try again." : "Could not generate a hint. Please try again.",
+    };
+    return;
+  }
+
+  if (signal?.aborted) return;
+
+  const generationCompletedAt = Date.now();
+  if (firstTokenAt === null) firstTokenAt = generationCompletedAt;
+
+  const finalResult = await finalizeHint(prepared, { content, strategy });
+  const persistenceCompletedAt = Date.now();
+
+  const metrics: TutorLatencyMetrics = {
+    decisionMs: decisionCompletedAt - requestStartedAt,
+    ttftMs: firstTokenAt - generationStartedAt,
+    generationMs: generationCompletedAt - generationStartedAt,
+    persistMs: persistenceCompletedAt - generationCompletedAt,
+    totalMs: persistenceCompletedAt - requestStartedAt,
+  };
+  logTutorLatency({
+    sessionId: prepared.session.id,
+    action: prepared.action,
+    model: resolveModelId(env.AI_MODEL_TUTOR_GENERATION),
+    metrics,
+  });
+
+  yield { type: "metadata", latency: metrics };
+  yield { type: "complete", session: finalResult.session, message: finalResult.message };
 }
 
 /** Explicitly switches an in-progress session into TEACH_BACK mode (spec §41 optional endpoint, §48 "remediation -> recall -> teach-back"). */

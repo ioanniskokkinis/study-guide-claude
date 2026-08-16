@@ -177,3 +177,31 @@ each phase depends on the previous one's persisted data model.
       for real. Model routing was reviewed call-by-call and left unchanged
       — every operation was already correctly routed to `fast` or
       `default`.
+- [x] **Phase 13 — Complete Tutor streaming + safe incremental Markdown.**
+      Closed the two remaining non-streaming Tutor generation paths:
+      `startTutorSession`'s opening question and the dedicated `/hint`
+      endpoint now stream through the exact same `TutorStreamEvent`
+      protocol (start/delta/metadata/complete/error) Phase 11 already
+      established for normal messages — `prepareTutorSessionStart`/
+      `finalizeSessionStart` and `prepareHint`/`finalizeHint` mirror the
+      existing `prepareTurn`/`finalizeTurn` split, and `streamText` (Phase
+      11) is the only Claude call involved, never a new one. A resumed
+      session (nothing to generate) still returns plain JSON, decided by
+      the route before any stream opens, never a fabricated stream. Fixed
+      a real gap streaming's cancellation support opened up: a session
+      whose opening-message generation is aborted before persisting no
+      longer gets silently "resumed" empty on the next visit — it's
+      detected as orphaned and its opening message is (re)generated
+      against the same row. `src/lib/http/sse.ts` consolidates the SSE
+      `ReadableStream` mechanics every one of the three streaming routes
+      now shares. `TutorChat.tsx` gained an explicit five-state streaming
+      state machine (`idle/connecting/streaming/complete/error/cancelled`)
+      with a monotonic stream-epoch guard against stale/duplicate
+      completions, memoized message bubbles, and scroll-follow that
+      respects the reader scrolling up. `src/lib/markdown/safe-markdown.tsx`
+      is a small dependency-free Markdown renderer (paragraphs, headings,
+      lists, bold/italic, inline code, fenced code blocks, blockquotes,
+      links) that renders straight to React elements — never
+      `dangerouslySetInnerHTML` — so literal HTML in model output is always
+      inert text, and unterminated constructs during streaming fall back to
+      plain text instead of crashing or producing malformed markup.

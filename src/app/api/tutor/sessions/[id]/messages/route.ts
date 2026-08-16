@@ -1,7 +1,8 @@
 import { getCurrentUser } from "@/lib/auth/dev-user";
-import { streamTutorMessage, tutorSessionErrorStatus } from "@/lib/tutor/tutor-orchestrator";
+import { streamTutorMessage, tutorSessionErrorStatus, type TutorStreamEvent } from "@/lib/tutor/tutor-orchestrator";
 import { CONFIDENCE_LEVELS, type ConfidenceLevel } from "@/lib/tutor/types";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { createSseStream, SSE_HEADERS } from "@/lib/http/sse";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -18,10 +19,6 @@ interface SubmitMessageBody {
 
 function isConfidenceLevel(value: unknown): value is ConfidenceLevel {
   return typeof value === "string" && (CONFIDENCE_LEVELS as readonly string[]).includes(value);
-}
-
-function sseFrame(event: unknown): string {
-  return `data: ${JSON.stringify(event)}\n\n`;
 }
 
 /**
@@ -66,51 +63,10 @@ export async function POST(request: Request, { params }: RouteContext) {
   const confidence = isConfidenceLevel(body.confidence) ? body.confidence : null;
   const signal = request.signal;
 
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const enqueue = (event: unknown) => {
-        try {
-          controller.enqueue(encoder.encode(sseFrame(event)));
-        } catch {
-          // The client disconnected and the controller is already closed — nothing left to send.
-        }
-      };
-
-      try {
-        for await (const event of streamTutorMessage({ sessionId, userId: user.id, content, confidence, signal })) {
-          enqueue(event);
-        }
-      } catch (error) {
-        // streamTutorMessage() catches its own decision/generation failures and yields a structured "error" event
-        // instead of throwing — this only catches something unexpected escaping that, so even a bug still reaches
-        // the client as a well-formed event rather than a silently truncated stream.
-        console.error("Failed to stream tutor message:", error);
-        const { message } = tutorSessionErrorStatus(error);
-        enqueue({ type: "error", message });
-      } finally {
-        try {
-          controller.close();
-        } catch {
-          // Already closed (e.g. after a client abort) — safe to ignore.
-        }
-      }
-    },
-    cancel() {
-      // The client disconnected/aborted the fetch. `signal` (the same request.signal passed into
-      // streamTutorMessage above) is what actually stops the in-flight Anthropic streaming call and
-      // the generation loop; this callback exists only so the platform's own stream bookkeeping is
-      // satisfied — there is nothing further to persist or clean up here (spec §8).
-    },
+  const stream = createSseStream<TutorStreamEvent>(streamTutorMessage({ sessionId, userId: user.id, content, confidence, signal }), (error) => {
+    console.error("Failed to stream tutor message:", error);
+    return { type: "error", message: tutorSessionErrorStatus(error).message };
   });
 
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
+  return new Response(stream, { status: 200, headers: SSE_HEADERS });
 }

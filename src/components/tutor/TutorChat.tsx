@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import { renderSafeMarkdown } from "@/lib/markdown/safe-markdown";
+import { consumeTutorStream, type RawTutorMessage, type RawTutorSession } from "@/lib/tutor/client-stream";
 
 interface DisplayMessage {
   id: string;
   role: "TUTOR" | "STUDENT" | "SYSTEM";
   content: string;
+  messageType?: string;
 }
 
 interface SessionInfo {
@@ -22,34 +25,18 @@ type LoadState =
   | { status: "ready"; session: SessionInfo; messages: DisplayMessage[] }
   | { status: "error"; message: string };
 
-interface RawMessage {
-  id: string;
-  role: "TUTOR" | "STUDENT" | "SYSTEM";
-  content: string;
+/** The Phase 13 §8 streaming state machine — every streaming call site (session start, message, hint) drives the same five states. */
+type StreamPhase = "idle" | "connecting" | "streaming" | "complete" | "error" | "cancelled";
+
+type StreamingKind = "opening" | "message" | "hint" | null;
+
+type LastAction = { kind: "message"; text: string; confidence: "CONFIDENT" | "UNSURE" | "GUESSING" | null } | { kind: "hint" } | null;
+
+function toDisplayMessage(m: RawTutorMessage): DisplayMessage {
+  return { id: m.id, role: m.role, content: m.content, messageType: m.messageType };
 }
 
-interface RawSession {
-  id: string;
-  status: SessionInfo["status"];
-  mode: SessionInfo["mode"];
-  difficulty: number;
-  questionsAnswered: number;
-  hintLevel: number;
-}
-
-/** Mirrors the server's TutorStreamEvent union (src/lib/tutor/tutor-orchestrator.ts) — kept independent since routes in this codebase are always consumed as plain JSON, never through a shared client/server type. */
-type StreamEvent =
-  | { type: "start"; sessionId: string; action: string; aiGenerated: boolean }
-  | { type: "delta"; text: string }
-  | { type: "metadata"; latency: unknown }
-  | { type: "complete"; session: RawSession; message: RawMessage }
-  | { type: "error"; message: string };
-
-function toDisplayMessage(m: RawMessage): DisplayMessage {
-  return { id: m.id, role: m.role, content: m.content };
-}
-
-function toSessionInfo(s: RawSession): SessionInfo {
+function toSessionInfo(s: RawTutorSession): SessionInfo {
   return {
     id: s.id,
     status: s.status,
@@ -70,17 +57,57 @@ const MODE_LABEL: Record<SessionInfo["mode"], string> = {
   REMEDIATION: "Remediation",
 };
 
-/** Parses complete `data: ...\n\n` SSE frames out of a growing buffer, returning the leftover partial buffer. */
-function extractSseFrames(buffer: string): { frames: string[]; rest: string } {
-  const frames: string[] = [];
-  let rest = buffer;
-  let boundary = rest.indexOf("\n\n");
-  while (boundary !== -1) {
-    frames.push(rest.slice(0, boundary));
-    rest = rest.slice(boundary + 2);
-    boundary = rest.indexOf("\n\n");
+const MESSAGE_TYPE_LABEL: Partial<Record<string, string>> = {
+  HINT: "Hint",
+};
+
+/** One conversation bubble — memoized so a streaming placeholder's frequent re-renders never re-parse/re-render already-settled messages (Phase 13 §15). */
+const MessageBubble = memo(function MessageBubble({ message }: { message: DisplayMessage }) {
+  const label = message.messageType ? MESSAGE_TYPE_LABEL[message.messageType] : undefined;
+  return (
+    <div className={message.role === "STUDENT" ? "flex justify-end" : "flex justify-start"}>
+      <div
+        className={
+          message.role === "STUDENT"
+            ? "max-w-[80%] rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white dark:bg-zinc-50 dark:text-zinc-900"
+            : "max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
+        }
+      >
+        {label && <p className="mb-1 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">{label}</p>}
+        {message.role === "STUDENT" ? <p className="whitespace-pre-wrap">{message.content}</p> : renderSafeMarkdown(message.content)}
+      </div>
+    </div>
+  );
+});
+
+/** The currently-streaming placeholder bubble — separate from `MessageBubble` since it re-renders on every delta by design. */
+function StreamingBubble({ phase, kind, text }: { phase: StreamPhase; kind: StreamingKind; text: string | null }) {
+  if (phase === "connecting") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-400 dark:bg-zinc-900 dark:text-zinc-500">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400" />
+            Tutor is thinking…
+          </span>
+        </div>
+      </div>
+    );
   }
-  return { frames, rest };
+
+  if (phase === "streaming" && text !== null) {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
+          {kind === "hint" && <p className="mb-1 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">Hint</p>}
+          {renderSafeMarkdown(text)}
+          <span className="ml-0.5 inline-block w-2 animate-pulse text-zinc-400">▌</span>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 export function TutorChat({
@@ -99,31 +126,87 @@ export function TutorChat({
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [input, setInput] = useState("");
   const [confidence, setConfidence] = useState<"CONFIDENT" | "UNSURE" | "GUESSING" | null>(null);
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
-  /** null = no active generation; "" or partial text = the streaming Tutor placeholder's accumulated text so far. */
+  const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
+  const [streamingKind, setStreamingKind] = useState<StreamingKind>(null);
   const [streamingText, setStreamingText] = useState<string | null>(null);
-  const [lastSent, setLastSent] = useState<{ text: string; confidence: "CONFIDENT" | "UNSURE" | "GUESSING" | null } | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [lastAction, setLastAction] = useState<LastAction>(null);
+
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef(true);
+  /** Bumped on every new stream; a callback that finds it's no longer current knows a newer stream has superseded it and drops its update (Phase 13 §8 — guards stale/duplicate completion and one stream overwriting another). */
+  const streamEpochRef = useRef(0);
 
+  const sending = streamPhase === "connecting" || streamPhase === "streaming";
+
+  function appendCompletedMessage(message: RawTutorMessage, session: RawTutorSession) {
+    const newMessage = toDisplayMessage(message);
+    const newSession = toSessionInfo(session);
+    setLoad((prev) => {
+      if (prev.status !== "ready") return prev;
+      if (prev.messages.some((m) => m.id === newMessage.id)) return { ...prev, session: newSession };
+      return { status: "ready", session: newSession, messages: [...prev.messages, newMessage] };
+    });
+  }
+
+  /** Starts or resumes the session (spec §20). A resume is a plain JSON response (nothing to generate); a fresh start streams the opening question via the same protocol as every other Tutor generation (Phase 13 §3/§19). */
   async function loadSession() {
-    const next = await fetch("/api/tutor/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ courseId, conceptId, mode }),
-    })
-      .then(async (response) => {
+    setLoad({ status: "loading" });
+    const epoch = ++streamEpochRef.current;
+
+    try {
+      const response = await fetch("/api/tutor/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ courseId, conceptId, mode }),
+      });
+
+      const isStream = (response.headers.get("Content-Type") ?? "").includes("text/event-stream");
+      if (!isStream) {
         const body = await parseJson(response);
         if (!response.ok) throw new Error(body.error ?? "Could not start the tutoring session.");
-        return {
+        setLoad({
           status: "ready",
-          session: toSessionInfo(body.session as RawSession),
-          messages: (body.messages as RawMessage[]).map(toDisplayMessage),
-        } as const;
-      })
-      .catch((err) => ({ status: "error", message: err instanceof Error ? err.message : "Could not start the session." }) as const);
-    setLoad(next);
+          session: toSessionInfo(body.session as RawTutorSession),
+          messages: (body.messages as RawTutorMessage[]).map(toDisplayMessage),
+        });
+        return;
+      }
+
+      setStreamingKind("opening");
+      setStreamPhase("streaming");
+      setStreamingText("");
+
+      await consumeTutorStream(response, (event) => {
+        if (streamEpochRef.current !== epoch) return;
+        if (event.type === "start") {
+          setLoad({
+            status: "ready",
+            session: { id: event.sessionId, status: "ACTIVE", mode, difficulty: 1, questionsAnswered: 0, hintLevel: 0 },
+            messages: [],
+          });
+        } else if (event.type === "delta") {
+          setStreamingText((prev) => (prev ?? "") + event.text);
+        } else if (event.type === "complete") {
+          setLoad({ status: "ready", session: toSessionInfo(event.session), messages: [toDisplayMessage(event.message)] });
+          setStreamPhase("complete");
+        } else if (event.type === "error") {
+          setLoad({ status: "error", message: event.message });
+          setStreamPhase("error");
+        }
+      });
+    } catch (err) {
+      if (streamEpochRef.current !== epoch) return;
+      setLoad({ status: "error", message: err instanceof Error ? err.message : "Could not start the session." });
+      setStreamPhase("error");
+    } finally {
+      if (streamEpochRef.current === epoch) {
+        setStreamingText(null);
+        setStreamingKind(null);
+      }
+    }
   }
 
   useEffect(() => {
@@ -136,12 +219,21 @@ export function TutorChat({
   }, [courseId, conceptId, mode]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [load, streamingText]);
+
+  function handleScroll() {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceFromBottom < 80;
+  }
 
   async function postAction(url: string, body?: Record<string, unknown>) {
     if (load.status !== "ready") return;
-    setSending(true);
+    setStreamPhase("connecting");
     setSendError(null);
     try {
       const response = await fetch(url, {
@@ -151,80 +243,66 @@ export function TutorChat({
       });
       const parsed = await parseJson(response);
       if (!response.ok) throw new Error(parsed.error ?? "Something went wrong.");
-      const newMessage = toDisplayMessage(parsed.message as RawMessage);
-      const newSession = toSessionInfo(parsed.session as RawSession);
-      setLoad({ status: "ready", session: newSession, messages: [...load.messages, newMessage] });
+      appendCompletedMessage(parsed.message as RawTutorMessage, parsed.session as RawTutorSession);
+      setStreamPhase("complete");
     } catch (err) {
       setSendError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setSending(false);
+      setStreamPhase("error");
     }
   }
 
-  /** Streams a chat turn via SSE (Phase 11): the Tutor placeholder appears immediately and fills in as `delta` events arrive; `complete` swaps it for the real persisted message. */
-  async function streamTurn(sessionId: string, text: string, confidenceValue: typeof confidence) {
-    setSending(true);
-    setSendError(null);
-    setStreamingText("");
-
+  /**
+   * Drives one streaming Tutor turn — a normal message or a hint — through
+   * the shared protocol (Phase 13 §4: "do not create a special hint
+   * streaming implementation"). `fetchFn` is the only thing that differs
+   * between them.
+   */
+  async function runTutorStream(fetchFn: (signal: AbortSignal) => Promise<Response>, kind: "message" | "hint") {
+    if (load.status !== "ready") return;
+    const epoch = ++streamEpochRef.current;
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    setStreamPhase("connecting");
+    setSendError(null);
+    setStreamingText("");
+    setStreamingKind(kind);
 
     try {
-      const response = await fetch(`/api/tutor/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text, confidence: confidenceValue }),
-        signal: controller.signal,
-      });
+      const response = await fetchFn(controller.signal);
+      if (streamEpochRef.current !== epoch) return;
 
       if (!response.ok || !response.body) {
         const parsed = await parseJson(response);
         throw new Error(parsed.error ?? "Something went wrong.");
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let done = false;
-
-      while (!done) {
-        const chunk = await reader.read();
-        done = chunk.done;
-        if (chunk.value) buffer += decoder.decode(chunk.value, { stream: true });
-
-        const { frames, rest } = extractSseFrames(buffer);
-        buffer = rest;
-        for (const frame of frames) {
-          const line = frame.split("\n").find((l) => l.startsWith("data: "));
-          if (!line) continue;
-          let event: StreamEvent;
-          try {
-            event = JSON.parse(line.slice("data: ".length));
-          } catch {
-            continue;
-          }
-
-          if (event.type === "delta") {
-            setStreamingText((prev) => (prev ?? "") + event.text);
-          } else if (event.type === "complete") {
-            const newMessage = toDisplayMessage(event.message);
-            const newSession = toSessionInfo(event.session);
-            setLoad((prev) => (prev.status === "ready" ? { status: "ready", session: newSession, messages: [...prev.messages, newMessage] } : prev));
-          } else if (event.type === "error") {
-            setSendError(event.message);
-          }
+      setStreamPhase("streaming");
+      await consumeTutorStream(response, (event) => {
+        if (streamEpochRef.current !== epoch) return;
+        if (event.type === "delta") {
+          setStreamingText((prev) => (prev ?? "") + event.text);
+        } else if (event.type === "complete") {
+          appendCompletedMessage(event.message, event.session);
+          setStreamPhase("complete");
+        } else if (event.type === "error") {
+          setSendError(event.message);
+          setStreamPhase("error");
         }
-      }
+      });
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (streamEpochRef.current !== epoch) return;
+      if (controller.signal.aborted) {
+        setStreamPhase("cancelled");
+      } else {
         setSendError(err instanceof Error ? err.message : "Something went wrong.");
+        setStreamPhase("error");
       }
-      // Aborted (user hit Stop) — not an error; the placeholder is simply cleared in `finally` below.
     } finally {
-      setStreamingText(null);
-      setSending(false);
-      abortControllerRef.current = null;
+      if (streamEpochRef.current === epoch) {
+        setStreamingText(null);
+        setStreamingKind(null);
+        abortControllerRef.current = null;
+      }
     }
   }
 
@@ -236,13 +314,31 @@ export function TutorChat({
     setInput("");
     const usedConfidence = confidence;
     setConfidence(null);
-    setLastSent({ text: trimmed, confidence: usedConfidence });
-    await streamTurn(load.session.id, trimmed, usedConfidence);
+    setLastAction({ kind: "message", text: trimmed, confidence: usedConfidence });
+    const sessionId = load.session.id;
+    await runTutorStream(
+      (signal) =>
+        fetch(`/api/tutor/sessions/${sessionId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: trimmed, confidence: usedConfidence }),
+          signal,
+        }),
+      "message",
+    );
+  }
+
+  async function requestHint() {
+    if (load.status !== "ready" || sending) return;
+    const sessionId = load.session.id;
+    setLastAction({ kind: "hint" });
+    await runTutorStream((signal) => fetch(`/api/tutor/sessions/${sessionId}/hint`, { method: "POST", signal }), "hint");
   }
 
   function retry() {
-    if (!lastSent) return;
-    void send(lastSent.text);
+    if (!lastAction) return;
+    if (lastAction.kind === "message") void send(lastAction.text);
+    else void requestHint();
   }
 
   function cancelGeneration() {
@@ -276,35 +372,18 @@ export function TutorChat({
         )}
       </div>
 
-      <div className="max-h-96 space-y-3 overflow-y-auto px-4 py-4">
+      <div ref={scrollContainerRef} onScroll={handleScroll} className="max-h-96 space-y-3 overflow-y-auto px-4 py-4">
         {messages.map((m) => (
-          <div key={m.id} className={m.role === "STUDENT" ? "flex justify-end" : "flex justify-start"}>
-            <div
-              className={
-                m.role === "STUDENT"
-                  ? "max-w-[80%] rounded-lg bg-zinc-900 px-3 py-2 text-sm whitespace-pre-wrap text-white dark:bg-zinc-50 dark:text-zinc-900"
-                  : "max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm whitespace-pre-wrap text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
-              }
-            >
-              {m.content}
-            </div>
-          </div>
+          <MessageBubble key={m.id} message={m} />
         ))}
-        {streamingText !== null && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm whitespace-pre-wrap text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-              {streamingText}
-              <span className="animate-pulse">▌</span>
-            </div>
-          </div>
-        )}
+        <StreamingBubble phase={streamPhase} kind={streamingKind} text={streamingText} />
         <div ref={messagesEndRef} />
       </div>
 
       {sendError && (
         <div className="flex items-center gap-3 px-4">
           <p className="text-sm text-red-600 dark:text-red-400">{sendError}</p>
-          {lastSent && (
+          {lastAction && (
             <button
               type="button"
               onClick={retry}
@@ -380,7 +459,7 @@ export function TutorChat({
           <div className="mt-3 flex flex-wrap gap-3 text-sm">
             <button
               type="button"
-              onClick={() => void postAction(`/api/tutor/sessions/${session.id}/hint`)}
+              onClick={() => void requestHint()}
               disabled={sending}
               className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
             >
