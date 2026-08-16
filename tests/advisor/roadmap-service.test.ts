@@ -123,7 +123,7 @@ describe("createStudyRoadmap", () => {
     expect(totalWeekMinutes).toBeLessThanOrEqual(20 * 8); // 7 days inclusive + safety margin
   });
 
-  it("logs the AI call to AiUsageLog with requestType STUDY_ADVISOR_ROADMAP and a positive estimated cost", async () => {
+  it("logs the AI call to AiUsageLog with requestType STUDY_ADVISOR_INITIAL and a positive estimated cost", async () => {
     const { course, concepts } = await seedCourseWithConcepts(userId, { conceptCount: 1 });
     mockAiOutput([concepts[0].id]);
 
@@ -138,7 +138,7 @@ describe("createStudyRoadmap", () => {
     // extractStructured is mocked, so its own usage-logging body never runs — this test instead
     // confirms the call shape that would drive that logging (requestType, userId) is correct.
     const call = vi.mocked(extractStructured).mock.calls[0][0];
-    expect(call.requestType).toBe("STUDY_ADVISOR_ROADMAP");
+    expect(call.requestType).toBe("STUDY_ADVISOR_INITIAL");
     expect(call.userId).toBe(userId);
   });
 

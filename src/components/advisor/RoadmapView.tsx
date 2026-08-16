@@ -4,9 +4,30 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { getRoadmap, getTodayPlan } from "@/lib/advisor/queries";
 import type { RoadmapProgress } from "@/lib/advisor/progress";
+import type { HealthResult, RoadmapHealth } from "@/lib/advisor/health";
+import type { AdaptationCheckResult } from "@/lib/advisor/change-detection";
+import type { NextBestActionResult } from "@/lib/advisor/next-action";
+import type { RoadmapChangeSummary } from "@/lib/advisor/diff";
 
 type Roadmap = NonNullable<Awaited<ReturnType<typeof getRoadmap>>>;
 type TodayPlan = NonNullable<Awaited<ReturnType<typeof getTodayPlan>>>;
+
+const HEALTH_COPY: Record<RoadmapHealth, { label: string; className: string }> = {
+  ON_TRACK: { label: "Your plan is on track.", className: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
+  AT_RISK: { label: "You're slightly behind schedule.", className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
+  BEHIND: { label: "You're behind schedule. We've adjusted the next few sessions.", className: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" },
+  INSUFFICIENT_DATA: { label: "Not enough data yet to tell if you're on track.", className: "bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400" },
+};
+
+const NEXT_ACTION_LABEL: Record<string, string> = {
+  REVIEW_TOPIC: "Review",
+  PRACTICE_TOPIC: "Practice",
+  LEARN_PREREQUISITE: "Learn",
+  ACTIVE_RECALL: "Active recall",
+  TUTOR: "Talk to the Tutor",
+  EXAM_PRACTICE: "Exam practice",
+  SPACED_REPETITION: "Review",
+};
 
 function formatDate(date: Date | string) {
   return new Date(date).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -39,16 +60,26 @@ export function RoadmapView({
   roadmap,
   progress,
   todayPlan,
+  health,
+  adaptation,
 }: {
   courseId: string;
   roadmap: Roadmap;
   progress: RoadmapProgress;
   todayPlan: TodayPlan;
+  health: HealthResult;
+  adaptation: AdaptationCheckResult | null;
 }) {
   const router = useRouter();
   const [replanning, setReplanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingItemId, setPendingItemId] = useState<string | null>(null);
+  const [nextAction, setNextAction] = useState<NextBestActionResult | null>(null);
+  const [loadingNextAction, setLoadingNextAction] = useState(false);
+  const [pausing, setPausing] = useState(false);
+  const [resumeNote, setResumeNote] = useState<string | null>(null);
+
+  const changeSummary = roadmap.changeSummary as RoadmapChangeSummary | null;
 
   const priorityItems = roadmap.weeks
     .flatMap((w) => w.items)
@@ -93,6 +124,44 @@ export function RoadmapView({
     }
   }
 
+  async function handleWhatsNext() {
+    setLoadingNextAction(true);
+    try {
+      const response = await fetch(`/api/roadmaps/${roadmap.id}/next-action`);
+      const body = await response.json().catch(() => null);
+      setNextAction(response.ok ? body : { type: "NONE", reason: "Could not load a suggestion right now." });
+    } catch {
+      setNextAction({ type: "NONE", reason: "Could not load a suggestion right now." });
+    } finally {
+      setLoadingNextAction(false);
+    }
+  }
+
+  async function handlePause() {
+    setPausing(true);
+    try {
+      await fetch(`/api/roadmaps/${roadmap.id}/pause`, { method: "POST" });
+      router.refresh();
+    } finally {
+      setPausing(false);
+    }
+  }
+
+  async function handleResume() {
+    setPausing(true);
+    setResumeNote(null);
+    try {
+      const response = await fetch(`/api/roadmaps/${roadmap.id}/resume`, { method: "POST" });
+      const body = await response.json().catch(() => null);
+      if (response.ok && body?.suggestedAdaptation?.needed) {
+        setResumeNote("Your plan may need a few adjustments now that you're back. You can review changes below with Replan.");
+      }
+      router.refresh();
+    } finally {
+      setPausing(false);
+    }
+  }
+
   return (
     <div className="mt-2">
       <div className="flex items-start justify-between gap-4">
@@ -102,13 +171,33 @@ export function RoadmapView({
         </div>
         <div className="flex shrink-0 gap-2">
           {roadmap.status === "ACTIVE" && (
+            <>
+              <button
+                type="button"
+                onClick={handlePause}
+                disabled={pausing}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
+              >
+                Pause
+              </button>
+              <button
+                type="button"
+                onClick={handleReplan}
+                disabled={replanning}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
+              >
+                {replanning ? "Replanning…" : "Replan"}
+              </button>
+            </>
+          )}
+          {roadmap.status === "PAUSED" && (
             <button
               type="button"
-              onClick={handleReplan}
-              disabled={replanning}
+              onClick={handleResume}
+              disabled={pausing}
               className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
             >
-              {replanning ? "Replanning…" : "Replan"}
+              {pausing ? "Resuming…" : "Resume"}
             </button>
           )}
           <a
@@ -122,6 +211,69 @@ export function RoadmapView({
         </div>
       </div>
       {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {resumeNote && <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{resumeNote}</p>}
+
+      <span className={`mt-4 inline-block rounded-full px-3 py-1 text-xs font-medium ${HEALTH_COPY[health.health].className}`}>
+        {HEALTH_COPY[health.health].label}
+      </span>
+
+      {adaptation?.needed && (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950">
+          <p className="font-medium text-amber-900 dark:text-amber-200">Your study plan may need an update.</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-amber-800 dark:text-amber-300">
+            {adaptation.details.map((detail, i) => (
+              <li key={i}>{detail}</li>
+            ))}
+          </ul>
+          {roadmap.status === "ACTIVE" && (
+            <button
+              type="button"
+              onClick={handleReplan}
+              disabled={replanning}
+              className="mt-3 rounded-md bg-amber-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50 dark:bg-amber-200 dark:text-amber-950"
+            >
+              {replanning ? "Updating…" : "Review and update my plan"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {changeSummary && (changeSummary.removed.length > 0 || changeSummary.movedEarlier.length > 0 || changeSummary.added.length > 0) && (
+        <div className="mt-4 rounded-lg border border-zinc-200 p-4 text-sm dark:border-zinc-800">
+          <p className="font-medium text-zinc-900 dark:text-zinc-50">What changed in this plan</p>
+          {roadmap.adaptationReason && <p className="mt-1 text-zinc-500">{roadmap.adaptationReason}</p>}
+          {changeSummary.added.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-zinc-400">Added</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-zinc-700 dark:text-zinc-300">
+                {changeSummary.added.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {changeSummary.movedEarlier.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-zinc-400">Moved earlier</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-zinc-700 dark:text-zinc-300">
+                {changeSummary.movedEarlier.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {changeSummary.removed.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-zinc-400">No longer needed</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-zinc-700 dark:text-zinc-300">
+                {changeSummary.removed.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border border-zinc-200 p-4 text-sm sm:grid-cols-4 dark:border-zinc-800">
         <div>
@@ -182,6 +334,36 @@ export function RoadmapView({
           ))}
         </ul>
       )}
+
+      <div className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Not sure where to start?</p>
+          <button
+            type="button"
+            onClick={handleWhatsNext}
+            disabled={loadingNextAction}
+            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            {loadingNextAction ? "Thinking…" : "What should I study now?"}
+          </button>
+        </div>
+        {nextAction && (
+          <div className="mt-3 text-sm">
+            {nextAction.type === "NONE" ? (
+              <p className="text-zinc-500">{nextAction.reason}</p>
+            ) : (
+              <>
+                <p className="font-medium text-zinc-900 dark:text-zinc-50">
+                  {NEXT_ACTION_LABEL[nextAction.type] ?? nextAction.type}: {nextAction.conceptName}
+                </p>
+                <p className="mt-0.5 text-xs text-zinc-400">
+                  {nextAction.durationMinutes} min — {nextAction.reason}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       <h2 className="mt-8 text-sm font-medium text-zinc-500">Priority topics</h2>
       <ul className="mt-2 space-y-2">

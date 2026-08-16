@@ -298,3 +298,56 @@ each phase depends on the previous one's persisted data model.
       devDependencies to dependencies) renders a persisted roadmap
       deterministically — no AI call, no fabricated content, never a raw
       database id in the output.
+- [x] **Phase 16 — Adaptive Study Advisor intelligence + dynamic
+      roadmap.** Upgrades Phase 15's static generator into a system that
+      reacts to real learning behavior, without adding a second Tutor,
+      spaced-repetition engine, adaptive engine, or knowledge model. A new
+      `AdaptationTrigger` enum and `StudyRoadmapStatus.PAUSED` extend the
+      existing versioning model; each replan still writes a full new
+      `StudyRoadmap` row (a deliberate divergence from the spec's own
+      delta-strategy suggestion, documented on the model) but now carries
+      `adaptationTrigger`/`adaptationReason`/`changeSummary`/
+      `lastEvaluatedAt` metadata, and `version` now increments from the
+      roadmap it replaces instead of every row defaulting to 1. Nine new
+      `src/lib/advisor/*` modules are almost entirely plain TypeScript
+      arithmetic over already-persisted data — `trends.ts` (windowed
+      average comparison over `KnowledgeEvidence.score`, ≥4 observations
+      before calling a direction), `missed-work.ts` and `urgency.ts`
+      (missed minutes/sessions, a days-remaining urgency band, and a hard
+      `insufficientTime` capacity check), `adaptive-priority.ts` (multiplies
+      Phase 6/15's existing `ConceptValueBreakdown.value` by trend/urgency
+      multipliers — never a competing scoring system, and scoped only to
+      adaptation decisions, not initial generation), `health.ts` (ON_TRACK/
+      AT_RISK/BEHIND/INSUFFICIENT_DATA from expected-vs-actual progress),
+      `change-detection.ts` (`checkAdaptationNeeded`, a read-only
+      significant-change gate windowed against `lastEvaluatedAt` — a GET
+      route never writes), `next-action.ts` (`getNextBestAction`, reusing
+      today/overdue roadmap items → Phase 9's `getDueReviews` → Phase 6's
+      knowledge-gap ranking, in that priority order, with a Tutor-signal
+      override on a low-accuracy incorrect streak), `diff.ts` (a human-
+      readable removed/movedEarlier/added summary, never a raw DB diff),
+      and `exam-mode.ts` (biases which existing `StudyRoadmapItemAction` an
+      item gets as a deadline nears — the Phase 8 Exam Engine itself is
+      untouched). `roadmap-service.ts` now carries a replan's already-
+      COMPLETED items forward as new rows (`carriedForward: true`) instead
+      of leaving them stranded in the archived version, and
+      `lifecycle.ts` adds pause/resume (no overdue penalties or
+      significant-change checks while paused; resume never auto-replans,
+      it only returns a `suggestedAdaptation` the student can act on).
+      `replan.ts` gained an options object (trigger/reason/deadline/
+      minutesPerDay/studyDays) so deadline and available-time changes reuse
+      the exact same pipeline with an explicit trigger rather than mutating
+      a roadmap in place. Six new routes
+      (`health`/`next-action`/`adaptation-check`/`pause`/`resume`/
+      `settings`) stay pure reads or thin wrappers around
+      `replanStudyRoadmap`. The roadmap detail page fetches `health` and
+      `adaptation` alongside Phase 15's existing DB reads in the same
+      `Promise.all` — still DB → render, never DB → AI → render — and
+      `RoadmapView` adds a health badge, a "What should I study now?"
+      panel, an adaptation-needed banner with a "Review and update my
+      plan" CTA, a change-diff panel, and pause/resume buttons, all in
+      plain non-technical copy. The only AI call remains the one from
+      Phase 15 (`generateRoadmapWithAi`), now split into
+      `STUDY_ADVISOR_INITIAL`/`STUDY_ADVISOR_REPLAN` request types so
+      Phase 12's existing usage aggregation separates their cost with zero
+      new aggregation code.

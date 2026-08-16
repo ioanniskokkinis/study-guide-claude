@@ -1438,15 +1438,40 @@ enum StudyRoadmapScopeType {
 
 enum StudyRoadmapStatus {
   ACTIVE
+  /// Phase 16 §32 — no overdue penalties and no automatic-adaptation checks accrue while paused; progress is preserved as-is.
+  PAUSED
   COMPLETED
   /// Superseded by a newer version via Replan (spec §36-37) — never deleted, so the original stays inspectable.
   ARCHIVED
+}
+
+/// Phase 16 §3 — why a given roadmap VERSION exists. INITIAL_GENERATION is
+/// the only trigger that never has a `replacesRoadmapId`; every other value
+/// always does.
+enum AdaptationTrigger {
+  INITIAL_GENERATION
+  MISSED_SESSIONS
+  LOW_PERFORMANCE
+  DEADLINE_CHANGE
+  KNOWLEDGE_CHANGE
+  MANUAL_REPLAN
+  TIME_AVAILABILITY_CHANGE
 }
 
 /// One planning cycle. Replanning never mutates or deletes an existing
 /// roadmap (spec §36) — it creates a new row with `replacesRoadmapId`
 /// pointing at the one it supersedes, and flips the old row's status to
 /// ARCHIVED, so the full version history stays queryable.
+///
+/// Phase 16 keeps this full-snapshot versioning strategy rather than
+/// switching to a delta/patch model: a roadmap's weeks/items are a few
+/// dozen rows at most, so a delta representation would add real complexity
+/// (reconstructing "current state" would require replaying patches) for no
+/// measurable storage or performance benefit at this scale. What Phase 16
+/// adds instead is richer *metadata* per version — why it exists
+/// (`adaptationTrigger`/`adaptationReason`) and what changed
+/// (`changeSummary`, computed deterministically by
+/// src/lib/advisor/diff.ts) — without touching the versioning shape itself.
 model StudyRoadmap {
   id       String @id @default(cuid())
   userId   String
@@ -1475,6 +1500,15 @@ model StudyRoadmap {
   version           Int     @default(1)
   /// The roadmap this one replaced via Replan — null for an original (non-replanned) roadmap.
   replacesRoadmapId String? @unique
+
+  /// Why this specific version exists (Phase 16 §3) — INITIAL_GENERATION for the very first roadmap of a chain, otherwise the reason this version replaced the previous one.
+  adaptationTrigger AdaptationTrigger @default(INITIAL_GENERATION)
+  /// Short human-readable explanation shown to the student (Phase 16 §44) — e.g. "Your recent Genetics accuracy dropped to 44%." Null for the initial version.
+  adaptationReason  String?
+  /// Deterministic diff vs the roadmap this one replaced (Phase 16 §27) — {removed, movedEarlier, added}, never a raw DB diff. Null for the initial version.
+  changeSummary     Json?
+  /// Last time checkAdaptationNeeded() evaluated this roadmap (Phase 16 §21-22) — windows "new evidence since" so the same evidence is never double-counted across checks.
+  lastEvaluatedAt   DateTime?
 
   startDate DateTime
   endDate   DateTime?
@@ -1579,6 +1613,8 @@ model StudyRoadmapItem {
   isMilestone      Boolean                @default(false)
   baselineMastery  Float?
   sourceDocumentId String?
+  /// True when this item was copied forward from a previous roadmap version's already-COMPLETED work (Phase 16 §26) rather than newly generated — preserves visible continuity ("Algebra Basics ✓") instead of burying completed history in an archived roadmap.
+  carriedForward   Boolean                @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

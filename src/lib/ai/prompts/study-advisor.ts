@@ -53,6 +53,8 @@ export interface AdvisorPriorityInput {
   goalRelevance: number;
   value: number;
   blockedByConceptName: string | null;
+  /** Phase 16 §6, §24 — deterministic trend (never AI-inferred) so the AI can reason "declining + important -> raise priority" without recomputing anything itself. */
+  trend?: "IMPROVING" | "STABLE" | "DECLINING" | "INSUFFICIENT_DATA";
 }
 
 export interface AdvisorPromptInput {
@@ -71,8 +73,8 @@ export interface AdvisorPromptInput {
   strongConceptCount: number;
   unknownConceptCount: number;
   priorities: AdvisorPriorityInput[];
-  /** Set only when this generation is a replan (Phase 15 §36-38) — overdue/completed items from the roadmap being replaced. */
-  replanContext?: { overdueCount: number; completedCount: number };
+  /** Set only when this generation is a replan (Phase 15 §36-38, extended Phase 16 §7-8) — overdue/completed/missed-minute counts from the roadmap being replaced. */
+  replanContext?: { overdueCount: number; completedCount: number; missedMinutes?: number };
 }
 
 const SYSTEM_PROMPT = `You are a Study Advisor. You decide WHAT a student should study, in what ORDER, and WHY — never HOW MUCH TIME exists (that has already been calculated for you and is fixed) and never facts about the student's performance (those are given to you as exact numbers).
@@ -95,12 +97,13 @@ export function buildStudyAdvisorPrompt(input: AdvisorPromptInput) {
     .map((p, i) => {
       const accuracy = p.recentAccuracy != null ? `${Math.round(p.recentAccuracy * 100)}%` : "no recent attempts";
       const blocked = p.blockedByConceptName ? ` | blocked by prerequisite: ${p.blockedByConceptName}` : "";
-      return `${i + 1}. conceptId=${p.conceptId} | name="${p.conceptName}" | mastery=${Math.round(p.masteryPercent * 100)}% | recent accuracy=${accuracy} | weakness=${p.weakness.toFixed(2)} | forgetting risk=${p.forgettingRisk.toFixed(2)} | prerequisite importance=${p.prerequisiteImportance.toFixed(2)} | goal relevance=${p.goalRelevance.toFixed(2)} | overall priority value=${p.value.toFixed(2)}${blocked}`;
+      const trend = p.trend && p.trend !== "INSUFFICIENT_DATA" ? ` | recent trend: ${p.trend.toLowerCase()}` : "";
+      return `${i + 1}. conceptId=${p.conceptId} | name="${p.conceptName}" | mastery=${Math.round(p.masteryPercent * 100)}% | recent accuracy=${accuracy} | weakness=${p.weakness.toFixed(2)} | forgetting risk=${p.forgettingRisk.toFixed(2)} | prerequisite importance=${p.prerequisiteImportance.toFixed(2)} | goal relevance=${p.goalRelevance.toFixed(2)} | overall priority value=${p.value.toFixed(2)}${blocked}${trend}`;
     })
     .join("\n");
 
   const replanLine = input.replanContext
-    ? `\nThis is a replan of an existing roadmap: ${input.replanContext.completedCount} item(s) already completed, ${input.replanContext.overdueCount} item(s) overdue. Adjust the plan honestly for the time remaining.`
+    ? `\nThis is a replan of an existing roadmap: ${input.replanContext.completedCount} item(s) already completed, ${input.replanContext.overdueCount} item(s) overdue${input.replanContext.missedMinutes ? ` (${input.replanContext.missedMinutes} minutes of missed study time)` : ""}. Adjust the plan honestly for the time remaining — redistribute missed material sensibly rather than piling it all onto the very next session.`
     : "";
 
   const prompt = `Course: ${input.courseTitle}

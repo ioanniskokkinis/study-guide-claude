@@ -1,11 +1,14 @@
 import { prisma } from "@/lib/db/prisma";
-import type { Prisma, StudyRoadmapItemAction } from "@/generated/prisma/client";
+import type { AdaptationTrigger, Prisma, StudyRoadmapItemAction } from "@/generated/prisma/client";
 import { resolveStudyScope, InvalidScopeError, type ScopeInput } from "./scope";
 import { analyzeKnowledgeGaps, NoScopedConceptsError, type ConceptPriority } from "./knowledge-gaps";
 import { calculateTimeBudget, type TimeBudget } from "./time-budget";
 import { buildAdvisorContext } from "./context";
 import { generateRoadmapWithAi } from "./roadmap-generator";
 import { buildItemReason } from "./reasons";
+import { computeRoadmapDiff, type DiffableItem, type RoadmapChangeSummary } from "./diff";
+import { applyExamModeBias, examModePhase } from "./exam-mode";
+import { getConceptPerformanceTrends } from "./trends";
 import { MASTERY_THRESHOLDS } from "@/lib/learning/mastery-engine";
 
 export { InvalidScopeError, NoScopedConceptsError };
@@ -33,7 +36,11 @@ export interface CreateRoadmapInput {
   /** Set only by replanStudyRoadmap() (Phase 15 §36-37) — links the new version to the one it supersedes and archives the old one, all inside the same transaction. */
   replacesRoadmapId?: string;
   /** Set only by replanStudyRoadmap() — surfaced to the AI so its summary/reasons can honestly account for prior progress instead of pretending this is a fresh start. */
-  replanContext?: { overdueCount: number; completedCount: number };
+  replanContext?: { overdueCount: number; completedCount: number; missedMinutes?: number };
+  /** Why this version exists (Phase 16 §3) — defaults to INITIAL_GENERATION; replanStudyRoadmap() always passes an explicit value. */
+  adaptationTrigger?: AdaptationTrigger;
+  /** Short human-readable explanation shown to the student (Phase 16 §44) — null for the initial version. */
+  adaptationReason?: string | null;
 }
 
 export class InvalidRoadmapInputError extends Error {}
@@ -56,7 +63,8 @@ function validateInput(input: CreateRoadmapInput): void {
   }
 }
 
-function actionForPriority(priority: ConceptPriority): StudyRoadmapItemAction {
+/** Exported so Phase 16's next-best-action engine (src/lib/advisor/next-action.ts) reuses the exact same mastery-bucket -> action mapping instead of a second, possibly-diverging one. */
+export function actionForPriority(priority: ConceptPriority): StudyRoadmapItemAction {
   const hasAttempts = priority.recentAccuracy != null || priority.masteryPercent > 0;
   if (!hasAttempts) return "LEARN";
   if (priority.masteryPercent < MASTERY_THRESHOLDS.weak) return "ACTIVE_RECALL";
@@ -120,6 +128,7 @@ function buildWeeksAndItems(params: BuildContentParams) {
 
   const topPriorities = Array.from(params.priorityById.values());
   const now = params.now;
+  const phase = examModePhase(params.endDate, now);
 
   for (const weekBudget of params.timeBudget.weeks) {
     const aiWeek = params.aiWeeks.find((w) => w.weekNumber === weekBudget.weekNumber);
@@ -137,9 +146,10 @@ function buildWeeksAndItems(params: BuildContentParams) {
         const priority = params.priorityById.get(conceptId);
         if (!priority) return;
 
+        const baseAction = actionForPriority(priority);
         items.push({
           conceptId,
-          action: actionForPriority(priority),
+          action: applyExamModeBias(baseAction, phase, priority.masteryPercent < MASTERY_THRESHOLDS.weak),
           title: priority.conceptName,
           estimatedMinutes: params.input.minutesPerDay,
           priority: priority.breakdown.value,
@@ -208,6 +218,17 @@ export async function createStudyRoadmap(userId: string, input: CreateRoadmapInp
   const course = await prisma.course.findFirst({ where: { id: input.courseId, userId }, select: { id: true, title: true } });
   if (!course) throw new InvalidScopeError("Course not found.");
 
+  // Loaded up front (before any AI call) so a replan's completed work can be carried forward and
+  // diffed against the new plan even if the AI call itself later fails (spec §26-27).
+  const previousItems = input.replacesRoadmapId
+    ? await prisma.studyRoadmapItem.findMany({ where: { roadmapId: input.replacesRoadmapId } })
+    : [];
+  // Phase 16 §3/§26 — each replan is one version higher than the roadmap it replaces, so version
+  // numbers stay consistent across a whole replan chain instead of every row defaulting to 1.
+  const previousVersion = input.replacesRoadmapId
+    ? (await prisma.studyRoadmap.findUnique({ where: { id: input.replacesRoadmapId }, select: { version: true } }))?.version
+    : undefined;
+
   const scope = await resolveStudyScope(userId, input.courseId, input.scope);
   const gaps = await analyzeKnowledgeGaps(userId, input.courseId, scope.conceptIds);
 
@@ -215,6 +236,9 @@ export async function createStudyRoadmap(userId: string, input: CreateRoadmapInp
   const endDate = input.deadline ?? new Date(now.getTime() + DEFAULT_PLANNING_HORIZON_DAYS * 24 * 60 * 60 * 1000);
   const studyDays = input.studyDays ?? [];
   const timeBudget = calculateTimeBudget({ minutesPerDay: input.minutesPerDay, studyDays, startDate: now, endDate });
+
+  const allowedConceptIds = new Set(gaps.priorities.map((p) => p.conceptId));
+  const trends = await getConceptPerformanceTrends(userId, Array.from(allowedConceptIds));
 
   const context = buildAdvisorContext({
     courseTitle: course.title,
@@ -226,12 +250,18 @@ export async function createStudyRoadmap(userId: string, input: CreateRoadmapInp
     timeBudget,
     gaps,
     replanContext: input.replanContext,
+    trends,
   });
 
-  const allowedConceptIds = new Set(gaps.priorities.map((p) => p.conceptId));
   let aiOutput;
   try {
-    aiOutput = await generateRoadmapWithAi({ input: context, allowedConceptIds, userId, courseId: input.courseId });
+    aiOutput = await generateRoadmapWithAi({
+      input: context,
+      allowedConceptIds,
+      userId,
+      courseId: input.courseId,
+      requestType: input.replacesRoadmapId ? "STUDY_ADVISOR_REPLAN" : "STUDY_ADVISOR_INITIAL",
+    });
   } catch (error) {
     throw new RoadmapGenerationError(error);
   }
@@ -251,6 +281,25 @@ export async function createStudyRoadmap(userId: string, input: CreateRoadmapInp
     aiMilestones: aiOutput.milestones,
   });
 
+  // Completed work is preserved by copying it forward as already-COMPLETED items on the new
+  // roadmap (spec §26) — never regenerated, never left only in the archived old version.
+  const completedToCarryForward = previousItems.filter((item) => !item.isMilestone && item.status === "COMPLETED");
+
+  let changeSummary: RoadmapChangeSummary | null = null;
+  if (input.replacesRoadmapId) {
+    const oldDiffable: DiffableItem[] = previousItems.map((item) => ({
+      conceptId: item.conceptId,
+      title: item.title,
+      estimatedMinutes: item.estimatedMinutes,
+      scheduledDate: item.scheduledDate,
+      action: item.action,
+      isMilestone: item.isMilestone,
+      status: item.status,
+    }));
+    const newDiffable: DiffableItem[] = weeks.flatMap((w) => w.items);
+    changeSummary = computeRoadmapDiff(oldDiffable, newDiffable);
+  }
+
   return prisma.$transaction(async (tx) => {
     const roadmap = await tx.studyRoadmap.create({
       data: {
@@ -269,7 +318,12 @@ export async function createStudyRoadmap(userId: string, input: CreateRoadmapInp
         recommendations: aiOutput.recommendations as unknown as Prisma.InputJsonValue,
         startDate: now,
         endDate,
+        version: previousVersion != null ? previousVersion + 1 : 1,
         replacesRoadmapId: input.replacesRoadmapId,
+        adaptationTrigger: input.adaptationTrigger ?? "INITIAL_GENERATION",
+        adaptationReason: input.adaptationReason ?? null,
+        changeSummary: changeSummary ? (changeSummary as unknown as Prisma.InputJsonValue) : undefined,
+        lastEvaluatedAt: now,
       },
     });
 
@@ -305,6 +359,27 @@ export async function createStudyRoadmap(userId: string, input: CreateRoadmapInp
           })),
         });
       }
+    }
+
+    if (completedToCarryForward.length > 0) {
+      await tx.studyRoadmapItem.createMany({
+        data: completedToCarryForward.map((item) => ({
+          roadmapId: roadmap.id,
+          weekId: null,
+          conceptId: item.conceptId,
+          action: item.action,
+          title: item.title,
+          estimatedMinutes: item.estimatedMinutes,
+          priority: item.priority,
+          reason: item.reason,
+          scheduledDate: item.scheduledDate,
+          status: "COMPLETED" as const,
+          completedAt: item.completedAt,
+          baselineMastery: item.baselineMastery,
+          sourceDocumentId: item.sourceDocumentId,
+          carriedForward: true,
+        })),
+      });
     }
 
     return tx.studyRoadmap.findUniqueOrThrow({

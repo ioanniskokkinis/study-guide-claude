@@ -1,6 +1,7 @@
 import type { AdvisorPromptInput, AdvisorPriorityInput } from "@/lib/ai/prompts/study-advisor";
 import type { KnowledgeGapSummary } from "./knowledge-gaps";
 import type { TimeBudget } from "./time-budget";
+import type { TrendResult } from "./trends";
 
 /**
  * Builds the compact, deterministic context handed to the Study Advisor AI
@@ -22,7 +23,9 @@ export interface BuildAdvisorContextParams {
   minutesPerDay: number;
   timeBudget: TimeBudget;
   gaps: KnowledgeGapSummary;
-  replanContext?: { overdueCount: number; completedCount: number };
+  replanContext?: { overdueCount: number; completedCount: number; missedMinutes?: number };
+  /** Phase 16 §6, §24 — per-concept performance trends, merged into each priority's context line. Omit or leave empty when trends aren't available/relevant; every concept defaults to "no trend data" rather than a fabricated one. */
+  trends?: Map<string, TrendResult>;
 }
 
 export function buildAdvisorContext(params: BuildAdvisorContextParams): AdvisorPromptInput {
@@ -37,6 +40,7 @@ export function buildAdvisorContext(params: BuildAdvisorContextParams): AdvisorP
     goalRelevance: p.breakdown.goalRelevance,
     value: p.breakdown.value,
     blockedByConceptName: p.breakdown.block.blocked ? p.breakdown.block.blockingConceptName : null,
+    trend: params.trends?.get(p.conceptId)?.trend,
   }));
 
   return {

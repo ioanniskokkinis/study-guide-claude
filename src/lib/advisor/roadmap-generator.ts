@@ -14,6 +14,8 @@ export interface GenerateRoadmapParams {
   allowedConceptIds: Set<string>;
   userId: string;
   courseId: string;
+  /** Phase 16 §47 — distinct operation names so admin usage aggregation (which already groups by requestType, Phase 12) can separate initial-generation cost from replan cost without any new aggregation code. */
+  requestType: "STUDY_ADVISOR_INITIAL" | "STUDY_ADVISOR_REPLAN";
 }
 
 /**
@@ -35,7 +37,7 @@ export async function generateRoadmapWithAi(params: GenerateRoadmapParams): Prom
     schema: StudyAdvisorAiOutputSchema,
     maxTokens: AI_MAX_TOKENS.STUDY_ADVISOR,
     effort: "medium",
-    requestType: "STUDY_ADVISOR_ROADMAP",
+    requestType: params.requestType,
     userId: params.userId,
     sessionId: params.courseId,
   });

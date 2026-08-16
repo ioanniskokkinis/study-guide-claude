@@ -40,7 +40,9 @@ export async function getRoadmapProgress(userId: string, roadmapId: string): Pro
 
   const totalItems = items.length;
   const completedItems = items.filter((i) => i.status === "COMPLETED").length;
-  const overdueItems = items.filter((i) => i.status === "PENDING" && i.scheduledDate != null && i.scheduledDate < now).length;
+  // Phase 16 §32 — a paused roadmap never accrues overdue penalties; resuming re-evaluates from a clean slate.
+  const overdueItems =
+    roadmap.status === "PAUSED" ? 0 : items.filter((i) => i.status === "PENDING" && i.scheduledDate != null && i.scheduledDate < now).length;
   const itemCompletionRate = totalItems > 0 ? completedItems / totalItems : 0;
 
   const totalMilestones = milestones.length;
