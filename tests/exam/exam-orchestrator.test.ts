@@ -503,3 +503,107 @@ describe("exam orchestrator (integration)", () => {
     });
   });
 });
+
+/**
+ * Production-hardening phase §F/§G/§N — quiz cache hit/miss and duplicate-
+ * generation prevention. createExam() reuses an existing, not-yet-submitted
+ * exam with the identical request shape instead of calling Claude again —
+ * the same mechanism serves both "don't regenerate a cached quiz" and
+ * "resume an unfinished one."
+ */
+describe("createExam reuse (cache + resume)", () => {
+  let userId: string;
+  let courseId: string;
+  let conceptId: string;
+
+  beforeAll(async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const user = await prisma.user.create({ data: { email: `test-exam-cache-${suffix}@example.com` } });
+    userId = user.id;
+    const course = await prisma.course.create({ data: { userId, title: `Exam cache ${suffix}`, knowledgeStatus: "READY" } });
+    courseId = course.id;
+
+    const document = await prisma.document.create({
+      data: {
+        courseId,
+        filename: "f.pdf",
+        originalFilename: "networking.pdf",
+        mimeType: "application/pdf",
+        fileSize: 10,
+        type: "pdf",
+        storagePath: "x/y.pdf",
+        processingStatus: "READY",
+      },
+    });
+    const concept = await seedConceptWithSource(courseId, document.id, "Subnetting", 0);
+    conceptId = concept.id;
+  });
+
+  afterAll(async () => {
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  beforeEach(() => {
+    vi.mocked(extractStructured).mockReset();
+    questionCounter = 0;
+    installDefaultMock();
+  });
+
+  function config() {
+    return {
+      courseId,
+      userId,
+      mode: "WRITTEN" as const,
+      questionCount: 3,
+      durationMinutes: 10,
+      difficulty: 2,
+      allowHints: false,
+      allowSources: false,
+      passingScore: 0.75,
+      targetConceptIds: [conceptId],
+    };
+  }
+
+  it("reuses an existing, not-yet-submitted exam with the same shape instead of calling Claude again (cache hit)", async () => {
+    const first = await createExam(config());
+    expect(vi.mocked(extractStructured)).toHaveBeenCalled();
+    vi.mocked(extractStructured).mockClear();
+
+    const second = await createExam(config());
+    expect(second.id).toBe(first.id);
+    expect(extractStructured).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh exam once the reusable one is submitted/graded (no stale reuse after completion)", async () => {
+    const first = await createExam(config());
+    await startExam(first.id, userId);
+    const questions = await prisma.examQuestion.findMany({ where: { examId: first.id } });
+    for (const q of questions) {
+      await submitExamAnswer({
+        examId: first.id,
+        userId,
+        questionId: q.id,
+        selectedOptionIds: q.options ? [(q.correctOptionIds as string[])[0]] : undefined,
+        answerText: q.options ? undefined : "A thorough answer.",
+      });
+    }
+    await submitExam(first.id, userId);
+
+    vi.mocked(extractStructured).mockClear();
+    const second = await createExam(config());
+    expect(second.id).not.toBe(first.id);
+    expect(extractStructured).toHaveBeenCalled();
+  });
+
+  it("does not reuse an exam scoped to a different concept", async () => {
+    const first = await createExam(config());
+
+    const document = await prisma.document.findFirstOrThrow({ where: { courseId } });
+    const otherConcept = await seedConceptWithSource(courseId, document.id, "Routing", 1);
+
+    vi.mocked(extractStructured).mockClear();
+    const second = await createExam({ ...config(), targetConceptIds: [otherConcept.id] });
+    expect(second.id).not.toBe(first.id);
+    expect(extractStructured).toHaveBeenCalled();
+  });
+});

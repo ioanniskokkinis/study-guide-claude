@@ -44,6 +44,13 @@ describe("extractRelationships", () => {
     expect(result).toHaveLength(1);
     expect(result[0].targetConceptName).toBe("Ports");
   });
+
+  it("skips a batch that stays invalid after retrying, instead of throwing and losing the whole pass (production-hardening §A6/§A7)", async () => {
+    vi.mocked(extractStructured).mockRejectedValue(new Error("Failed to parse structured output as JSON: Unterminated string"));
+
+    const result = await extractRelationships("Course", concepts);
+    expect(result).toEqual([]);
+  });
 });
 
 describe("extractPrerequisites", () => {

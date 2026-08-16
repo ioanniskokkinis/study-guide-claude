@@ -61,6 +61,8 @@ enum CourseStatus {
 
 enum KnowledgeStatus {
   NOT_STARTED
+  /// Build accepted but not yet running — the atomic "claim" state a concurrent build request is rejected against (production-hardening phase §A1/§L).
+  QUEUED
   PROCESSING
   READY
   FAILED
@@ -75,6 +77,13 @@ model Course {
   knowledgeStatus  KnowledgeStatus @default(NOT_STARTED)
   knowledgeError   String?
   knowledgeBuiltAt DateTime?
+  /// 0-100 — real progress from processed batches, never a fake timer (production-hardening phase §A5).
+  knowledgeProgress Int @default(0)
+  /// Machine-readable current stage: loading/extracting-concepts/normalizing-concepts/semantic-merge/relationships/prerequisites/validation/saving/complete/failed.
+  knowledgeStage String?
+  /// Human-readable progress line for the UI, e.g. "Extracting concepts — batch 12/30".
+  knowledgeStageMessage String?
+  knowledgeStartedAt DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 

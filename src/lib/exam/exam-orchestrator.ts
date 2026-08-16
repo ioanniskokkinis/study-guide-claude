@@ -104,7 +104,48 @@ export function toStudentFacingQuestion(q: ExamQuestion) {
 // Create / start
 // ---------------------------------------------------------------------------
 
+function conceptIdsKey(ids: unknown): string {
+  return Array.isArray(ids) && ids.length > 0 ? [...(ids as string[])].sort().join(",") : "";
+}
+
+/**
+ * Reuses an existing, not-yet-submitted exam with the identical request
+ * shape instead of generating a new one (production-hardening phase §F/§G)
+ * — the same student re-opening the same practice quiz resumes it rather
+ * than paying for (and waiting on) a fresh Claude generation every time.
+ * Once an exam is SUBMITTED/GRADED it's excluded, so "create" naturally
+ * starts a fresh attempt after a previous one is actually finished.
+ */
+async function findReusableExam(config: ExamConfig): Promise<(Exam & { questions: ExamQuestion[] }) | null> {
+  const baseDifficulty = typeof config.difficulty === "number" ? config.difficulty : 2;
+  const candidates = await prisma.exam.findMany({
+    where: {
+      userId: config.userId,
+      courseId: config.courseId,
+      mode: config.mode,
+      questionCount: config.questionCount,
+      difficultyMode: config.difficulty === "ADAPTIVE" ? "ADAPTIVE" : "FIXED",
+      status: { in: ["CREATED", "ACTIVE", "PAUSED"] },
+    },
+    orderBy: { createdAt: "desc" },
+    include: { questions: true },
+  });
+
+  const wantedKey = conceptIdsKey(config.targetConceptIds);
+  return (
+    candidates.find(
+      (exam) =>
+        exam.questions.length > 0 &&
+        (exam.difficultyMode !== "FIXED" || exam.difficulty === baseDifficulty) &&
+        conceptIdsKey(exam.targetConceptIds) === wantedKey,
+    ) ?? null
+  );
+}
+
 export async function createExam(config: ExamConfig): Promise<Exam & { questions: ExamQuestion[] }> {
+  const reusable = await findReusableExam(config);
+  if (reusable) return reusable;
+
   const courseMastery = await getCourseMastery(config.userId, config.courseId);
   if (!courseMastery || courseMastery.concepts.length === 0) throw new NoConceptsAvailableError();
 

@@ -45,4 +45,47 @@ describe("extractConceptsFromChunks", () => {
     expect(result).toEqual([]);
     expect(extractStructured).not.toHaveBeenCalled();
   });
+
+  it("reports real batch progress, never a fake timer", async () => {
+    vi.mocked(extractStructured).mockResolvedValue({ data: { concepts: [] }, usage: { inputTokens: 1, outputTokens: 1 } });
+    const chunks = Array.from({ length: 14 }, (_, i) => ({ id: `c${i}`, text: `chunk ${i}` }));
+
+    const progressCalls: Array<[number, number]> = [];
+    await extractConceptsFromChunks("Course", chunks, { onProgress: (processed, total) => progressCalls.push([processed, total]) });
+
+    expect(progressCalls).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+    ]);
+  });
+
+  it("degrades a permanently-invalid batch to zero concepts instead of crashing the whole extraction (production-hardening §A6)", async () => {
+    vi.mocked(extractStructured).mockRejectedValue(new Error("Failed to parse structured output as JSON: Unterminated string"));
+
+    const chunks = [{ id: "c1", text: "chunk 1" }];
+    const result = await extractConceptsFromChunks("Course", chunks);
+
+    expect(result).toEqual([]);
+  });
+
+  it("splits a failing multi-chunk batch in half and still extracts from the half that succeeds", async () => {
+    // Every call fails except when given exactly the single chunk "c0" (simulating one bad chunk
+    // poisoning its batch while the rest of the course still extracts successfully).
+    vi.mocked(extractStructured).mockImplementation(async (options) => {
+      if (options.prompt.includes("c0") && !options.prompt.includes("c1")) {
+        return { data: { concepts: [{ name: "Good Concept", description: "...", difficulty: 2, evidence: [{ chunkId: "c0", text: "x" }] }] }, usage: { inputTokens: 1, outputTokens: 1 } };
+      }
+      throw new Error("Failed to parse structured output as JSON: Unterminated string");
+    });
+
+    const chunks = [
+      { id: "c0", text: "good chunk" },
+      { id: "c1", text: "bad chunk" },
+    ];
+    const result = await extractConceptsFromChunks("Course", chunks);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("Good Concept");
+  });
 });

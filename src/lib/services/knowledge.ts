@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import type { RelationshipType } from "@/generated/prisma/enums";
-import { buildKnowledgeGraph, type KnowledgeBuildSummary } from "@/lib/knowledge/knowledge-builder";
+import { buildKnowledgeGraph } from "@/lib/knowledge/knowledge-builder";
 
 const VALID_RELATIONSHIP_TYPES: readonly RelationshipType[] = [
   "prerequisite",
@@ -23,6 +23,31 @@ export class KnowledgeBuildInProgressError extends Error {
   }
 }
 
+export interface KnowledgeProgress {
+  status: string;
+  progress: number;
+  stage: string | null;
+  message: string | null;
+  error: string | null;
+}
+
+/** Returns null if the course doesn't exist or isn't owned by `userId`. Cheap, DB-only read — safe to poll (production-hardening phase §A4). */
+export async function getKnowledgeProgress(userId: string, courseId: string): Promise<KnowledgeProgress | null> {
+  const course = await prisma.course.findFirst({
+    where: { id: courseId, userId },
+    select: { knowledgeStatus: true, knowledgeProgress: true, knowledgeStage: true, knowledgeStageMessage: true, knowledgeError: true },
+  });
+  if (!course) return null;
+
+  return {
+    status: course.knowledgeStatus,
+    progress: course.knowledgeProgress,
+    stage: course.knowledgeStage,
+    message: course.knowledgeStageMessage,
+    error: course.knowledgeError,
+  };
+}
+
 /** Returns null if the course doesn't exist or isn't owned by `userId`. */
 export async function getKnowledgeSummary(userId: string, courseId: string) {
   const course = await prisma.course.findFirst({
@@ -33,6 +58,9 @@ export async function getKnowledgeSummary(userId: string, courseId: string) {
       knowledgeStatus: true,
       knowledgeError: true,
       knowledgeBuiltAt: true,
+      knowledgeProgress: true,
+      knowledgeStage: true,
+      knowledgeStageMessage: true,
       _count: { select: { concepts: true } },
     },
   });
@@ -55,26 +83,44 @@ export async function getKnowledgeSummary(userId: string, courseId: string) {
     knowledgeStatus: course.knowledgeStatus,
     knowledgeError: course.knowledgeError,
     knowledgeBuiltAt: course.knowledgeBuiltAt,
+    knowledgeProgress: course.knowledgeProgress,
+    knowledgeStage: course.knowledgeStage,
+    knowledgeStageMessage: course.knowledgeStageMessage,
     conceptCount: course._count.concepts,
     relationshipCount: relationshipsCreated,
     prerequisiteCount: prerequisitesCreated,
   };
 }
 
-/** Throws KnowledgeBuildInProgressError if a build is already running. Returns null if not found/owned. */
-export async function triggerKnowledgeBuild(
-  userId: string,
-  courseId: string,
-): Promise<KnowledgeBuildSummary | null> {
-  const course = await prisma.course.findFirst({ where: { id: courseId, userId } });
+/**
+ * Accepts a knowledge graph build request and returns immediately —
+ * `buildKnowledgeGraph` itself runs unawaited (production-hardening phase
+ * §A1: the HTTP request must never stay open for the whole AI pipeline).
+ * The status flip to QUEUED happens via a single atomic `updateMany`
+ * guarded on the current status, so two rapid concurrent requests for the
+ * same course can never both "win" the claim (§L) — only one starts a job;
+ * the other gets KnowledgeBuildInProgressError. Returns null if the course
+ * doesn't exist or isn't owned by `userId`.
+ */
+export async function triggerKnowledgeBuild(userId: string, courseId: string): Promise<{ accepted: true } | null> {
+  const course = await prisma.course.findFirst({ where: { id: courseId, userId }, select: { id: true } });
   if (!course) {
     return null;
   }
-  if (course.knowledgeStatus === "PROCESSING") {
+
+  const claim = await prisma.course.updateMany({
+    where: { id: courseId, userId, knowledgeStatus: { notIn: ["QUEUED", "PROCESSING"] } },
+    data: { knowledgeStatus: "QUEUED", knowledgeError: null, knowledgeProgress: 0, knowledgeStage: null, knowledgeStageMessage: "Queued…" },
+  });
+  if (claim.count === 0) {
     throw new KnowledgeBuildInProgressError();
   }
 
-  return buildKnowledgeGraph(courseId, { userId });
+  // Fire-and-forget: buildKnowledgeGraph catches and persists its own failures, so this promise
+  // always resolves — nothing here can produce an unhandled rejection.
+  void buildKnowledgeGraph(courseId, { userId });
+
+  return { accepted: true };
 }
 
 export interface ConceptSearchResult {

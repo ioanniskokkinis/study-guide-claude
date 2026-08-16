@@ -11,6 +11,7 @@ import {
 } from "@/lib/services/student-knowledge";
 import { getReviewItemDetail } from "@/lib/review/review-queries";
 import { ConceptMyKnowledge } from "@/components/knowledge/ConceptMyKnowledge";
+import { PracticeConceptButton } from "@/components/knowledge/PracticeConceptButton";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,22 @@ export default async function ConceptDetailPage({ params }: PageProps) {
       <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
         {concept.name}
       </h1>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Link
+          href={`/courses/${concept.course.id}/study`}
+          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
+        >
+          Study
+        </Link>
+        <PracticeConceptButton courseId={concept.course.id} conceptId={concept.id} />
+        <Link
+          href={`/courses/${concept.course.id}/tutor?conceptId=${concept.id}`}
+          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
+        >
+          Ask Tutor
+        </Link>
+      </div>
 
       {mastery && (
         <ConceptMyKnowledge

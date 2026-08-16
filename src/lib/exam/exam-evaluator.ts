@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
+import { extractStructuredWithRetry } from "@/lib/ai/structured-retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import {
   buildAnswerGradingPrompt,
@@ -27,17 +28,17 @@ export async function generateExamQuestionContent(
   userId: string,
 ): Promise<ExamQuestionGenerationOutput> {
   const { system, prompt, schema } = buildExamQuestionGenerationPrompt(ctx);
-  const { data } = await withRetry(() =>
-    extractStructured({
-      model: env.AI_MODEL_EXAM_GENERATION,
-      system,
-      prompt,
-      schema,
-      maxTokens: AI_MAX_TOKENS.EXAM,
-      requestType: "EXAM_QUESTION_GENERATION",
-      userId,
-    }),
-  );
+  // Bounded retry against both transient failures and truncated/invalid JSON (production-hardening
+  // phase §A6/§E) — still no fabricated fallback content once retries are exhausted (see file docstring).
+  const { data } = await extractStructuredWithRetry({
+    model: env.AI_MODEL_EXAM_GENERATION,
+    system,
+    prompt,
+    schema,
+    maxTokens: AI_MAX_TOKENS.EXAM,
+    requestType: "EXAM_QUESTION_GENERATION",
+    userId,
+  });
   return ExamQuestionGenerationSchema.parse(data);
 }
 

@@ -1,4 +1,4 @@
-import { extractStructured } from "@/lib/ai/claude";
+import { extractStructuredWithRetry, StructuredExtractionFailedError } from "@/lib/ai/structured-retry";
 import {
   buildPrerequisiteAnalysisPrompt,
   PrerequisiteAnalysisSchema,
@@ -39,15 +39,22 @@ export async function extractPrerequisites(
   for (const batch of batchOf(concepts, MAX_CONCEPTS_PER_RELATIONSHIP_BATCH)) {
     const { system, prompt } = buildPrerequisiteAnalysisPrompt(courseTitle, batch);
 
-    const { data } = await extractStructured({
-      model: "default",
-      system,
-      prompt,
-      schema: PrerequisiteAnalysisSchema,
-      requestType: "prerequisite_analysis",
-      effort: "medium",
-      userId: options?.userId,
-    });
+    let data;
+    try {
+      ({ data } = await extractStructuredWithRetry({
+        model: "default",
+        system,
+        prompt,
+        schema: PrerequisiteAnalysisSchema,
+        requestType: "prerequisite_analysis",
+        effort: "medium",
+        userId: options?.userId,
+      }));
+    } catch (error) {
+      if (!(error instanceof StructuredExtractionFailedError)) throw error;
+      console.error(`Prerequisite analysis failed for a batch of ${batch.length} concept(s) in course "${courseTitle}", skipping:`, error);
+      continue;
+    }
 
     for (const prerequisite of data.prerequisites) {
       if (

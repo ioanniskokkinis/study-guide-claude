@@ -3,10 +3,9 @@ import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { getGraphData, getKnowledgeSummary, searchConcepts } from "@/lib/services/knowledge";
 import { getDevelopingConcepts, getKnowledgeSnapshot, getRecentMistakes } from "@/lib/services/student-knowledge";
-import { BuildKnowledgeGraphButton } from "@/components/knowledge/BuildKnowledgeGraphButton";
+import { KnowledgeGraphProgress } from "@/components/knowledge/KnowledgeGraphProgress";
 import { ConceptGraph } from "@/components/knowledge/ConceptGraph";
 import { MyKnowledgeSection } from "@/components/knowledge/MyKnowledgeSection";
-import { knowledgeStatusLabel } from "@/components/knowledge/status-label";
 
 export const dynamic = "force-dynamic";
 
@@ -47,44 +46,25 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
     getRecentMistakes(user.id, courseId),
   ]);
 
-  const status = knowledgeStatusLabel(summary.knowledgeStatus);
-
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
       <Link href={`/courses/${courseId}`} className="text-sm text-zinc-500 hover:underline">
         ← {summary.courseTitle}
       </Link>
-      <div className="mt-1 flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Knowledge Graph
-        </h1>
-        <span className={`text-sm font-medium ${status.className}`}>{status.label}</span>
-      </div>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Knowledge Graph</h1>
 
       <div className="mt-4">
-        <BuildKnowledgeGraphButton courseId={courseId} />
+        <KnowledgeGraphProgress
+          courseId={courseId}
+          initialStatus={summary.knowledgeStatus}
+          initialProgress={summary.knowledgeProgress}
+          initialStageMessage={summary.knowledgeStageMessage}
+          initialError={summary.knowledgeError}
+          conceptCount={summary.conceptCount}
+          relationshipCount={summary.relationshipCount}
+          prerequisiteCount={summary.prerequisiteCount}
+        />
       </div>
-
-      {summary.knowledgeError && (
-        <p className="mt-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {summary.knowledgeError}
-        </p>
-      )}
-
-      <dl className="mt-6 grid grid-cols-3 gap-4 rounded-lg border border-zinc-200 p-4 text-center dark:border-zinc-800">
-        <div>
-          <dt className="text-xs text-zinc-400">Concepts</dt>
-          <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{summary.conceptCount}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-zinc-400">Relationships</dt>
-          <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{summary.relationshipCount}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-zinc-400">Prerequisites</dt>
-          <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{summary.prerequisiteCount}</dd>
-        </div>
-      </dl>
 
       {knowledgeSnapshot && (
         <MyKnowledgeSection

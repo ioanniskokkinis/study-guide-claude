@@ -36,6 +36,11 @@ export function ConceptMyKnowledge({
 }) {
   const status = masteryStatusLabel(mastery.status);
   const accuracy = mastery.attemptCount > 0 ? mastery.successCount / mastery.attemptCount : null;
+  const weakerPrerequisite = prerequisiteStatus
+    ? [...prerequisiteStatus.prerequisites]
+        .filter((p) => p.mastery.overallMastery < mastery.overallMastery)
+        .sort((a, b) => a.mastery.overallMastery - b.mastery.overallMastery)[0]
+    : undefined;
 
   return (
     <div className="mt-8 rounded-lg border-2 border-dashed border-zinc-300 p-4 dark:border-zinc-700">
@@ -125,6 +130,21 @@ export function ConceptMyKnowledge({
               );
             })}
           </ul>
+          {weakerPrerequisite && (
+            <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
+              <p className="font-medium text-amber-800 dark:text-amber-300">Recommended prerequisite</p>
+              <p className="mt-1 text-zinc-700 dark:text-zinc-300">
+                {weakerPrerequisite.concept.name} — {formatMasteryPercent(weakerPrerequisite.mastery.overallMastery)} mastery, lower than this
+                concept&rsquo;s.
+              </p>
+              <a
+                href={`/concepts/${weakerPrerequisite.concept.id}`}
+                className="mt-2 inline-block rounded-md border border-amber-400 px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40"
+              >
+                Review prerequisite
+              </a>
+            </div>
+          )}
         </div>
       )}
 

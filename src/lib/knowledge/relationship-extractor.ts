@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { extractStructured } from "@/lib/ai/claude";
+import { extractStructuredWithRetry, StructuredExtractionFailedError } from "@/lib/ai/structured-retry";
 import {
   buildRelationshipExtractionPrompt,
   RelationshipExtractionSchema,
@@ -41,15 +41,24 @@ export async function extractRelationships(
   for (const batch of batchOf(concepts, MAX_CONCEPTS_PER_RELATIONSHIP_BATCH)) {
     const { system, prompt } = buildRelationshipExtractionPrompt(courseTitle, batch);
 
-    const { data } = await extractStructured({
-      model: "default",
-      system,
-      prompt,
-      schema: RelationshipExtractionSchema,
-      requestType: "relationship_extraction",
-      effort: "medium",
-      userId: options?.userId,
-    });
+    let data;
+    try {
+      ({ data } = await extractStructuredWithRetry({
+        model: "default",
+        system,
+        prompt,
+        schema: RelationshipExtractionSchema,
+        requestType: "relationship_extraction",
+        effort: "medium",
+        userId: options?.userId,
+      }));
+    } catch (error) {
+      if (!(error instanceof StructuredExtractionFailedError)) throw error;
+      // A truncated/invalid response for one batch of concepts just means those relationships are
+      // missing, not that the whole graph build should fail — skip this batch and keep going.
+      console.error(`Relationship extraction failed for a batch of ${batch.length} concept(s) in course "${courseTitle}", skipping:`, error);
+      continue;
+    }
 
     for (const relationship of data.relationships) {
       if (!knownNames.has(relationship.sourceConceptName) || !knownNames.has(relationship.targetConceptName)) {

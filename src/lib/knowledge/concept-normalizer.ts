@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { extractStructured } from "@/lib/ai/claude";
+import { extractStructuredWithRetry } from "@/lib/ai/structured-retry";
 import type { CandidateConcept, CandidateConceptEvidence } from "./concept-extractor";
 import { MAX_SEMANTIC_DUPLICATE_GROUPS } from "./config";
 
@@ -95,14 +95,23 @@ export async function findSemanticDuplicateGroups(
 
   const prompt = `Course: ${courseTitle}\n\nConcept names:\n${names.map((name) => `- ${name}`).join("\n")}\n\nFind groups of names that refer to the exact same concept.`;
 
-  const { data } = await extractStructured({
-    model: "fast",
-    system: SEMANTIC_MERGE_SYSTEM,
-    prompt,
-    schema: SemanticDuplicateSchema,
-    requestType: "concept_dedup",
-    userId: options?.userId,
-  });
+  const { data } = await extractStructuredWithRetry(
+    {
+      model: "fast",
+      system: SEMANTIC_MERGE_SYSTEM,
+      prompt,
+      schema: SemanticDuplicateSchema,
+      requestType: "concept_dedup",
+      userId: options?.userId,
+    },
+    // A too-large or truncated response is far more likely with many names — retry once more with half the list.
+    names.length > 4
+      ? (opts) => ({
+          ...opts,
+          prompt: `Course: ${courseTitle}\n\nConcept names:\n${names.slice(0, Math.ceil(names.length / 2)).map((name) => `- ${name}`).join("\n")}\n\nFind groups of names that refer to the exact same concept.`,
+        })
+      : undefined,
+  );
 
   return data;
 }
