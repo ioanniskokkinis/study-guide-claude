@@ -18,7 +18,12 @@ interface SubmitAnswerBody {
 }
 
 /**
- * Evaluates a student's answer and updates their mastery. Never trusts a
+ * Persists a student's answer immediately — never calls Claude (Phase 17
+ * §17). The response always includes the model answer (already persisted
+ * on the Question row) so the UI can show it before evaluation starts;
+ * `answer.evaluationStatus` tells the client whether it still needs to call
+ * POST .../answer/evaluate (PENDING) or was already settled by the
+ * deterministic exact-match fast path (COMPLETED). Never trusts a
  * client-supplied userId — ownership of the session and question is
  * re-verified server-side (spec §36).
  */

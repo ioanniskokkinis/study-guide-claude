@@ -38,7 +38,7 @@ vi.mock("@/lib/env", async (importOriginal) => {
   return { ...actual, env: { ...actual.env, ANTHROPIC_API_KEY: "test-anthropic-api-key" } };
 });
 
-import { extractStructured } from "@/lib/ai/claude";
+import { AiRequestTimeoutError, extractStructured } from "@/lib/ai/claude";
 
 /**
  * Phase 12 §3/§14 — cost calculation and usage aggregation. Real Postgres,
@@ -292,5 +292,50 @@ describe("extractStructured usage instrumentation (Phase 12 §2)", () => {
     expect(row).not.toBeNull();
     expect(row?.success).toBe(false);
     expect(row?.inputTokens).toBe(15);
+  });
+
+  /** Phase 17 §16 — the root cause of the "Evaluating..." hang was that no AI call anywhere had a bounded timeout. This exercises the actual AbortController wiring, not just a mocked rejection. */
+  it("aborts via AbortSignal once timeoutMs elapses, throws AiRequestTimeoutError, and still logs the failed call", async () => {
+    mockParse.mockImplementation((_params: unknown, options?: { signal?: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          const err = new Error("Request was aborted.");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+
+    await expect(
+      extractStructured({
+        model: "fast",
+        system: "sys",
+        prompt: "prompt",
+        schema: z.object({ message: z.string() }),
+        requestType: "TEST_TIMEOUT",
+        userId,
+        timeoutMs: 20,
+      }),
+    ).rejects.toBeInstanceOf(AiRequestTimeoutError);
+
+    const row = await prisma.aiUsageLog.findFirst({ where: { userId, requestType: "TEST_TIMEOUT" }, orderBy: { createdAt: "desc" } });
+    expect(row).not.toBeNull();
+    expect(row?.success).toBe(false);
+    expect(row?.inputTokens).toBe(0);
+  });
+
+  it("a call that resolves well within timeoutMs is unaffected by it", async () => {
+    mockParse.mockResolvedValue({ parsed_output: { message: "fast enough" }, usage: { input_tokens: 5, output_tokens: 2 } });
+
+    const result = await extractStructured({
+      model: "fast",
+      system: "sys",
+      prompt: "prompt",
+      schema: z.object({ message: z.string() }),
+      requestType: "TEST_TIMEOUT_NOT_HIT",
+      userId,
+      timeoutMs: 20_000,
+    });
+    expect(result.data.message).toBe("fast enough");
   });
 });

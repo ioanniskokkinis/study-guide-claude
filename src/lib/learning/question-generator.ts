@@ -94,8 +94,8 @@ export interface GenerateQuestionParams {
   type: GeneratedQuestionType;
   difficulty: number;
   userId: string;
-  /** Tags the AiUsageLog request type — REMEDIATION for retry/focused questions, QUESTION_GENERATION otherwise (spec §34). */
-  purpose?: "QUESTION_GENERATION" | "REMEDIATION";
+  /** Tags the AiUsageLog request type — REMEDIATION for retry/focused questions, ACTIVE_RECALL_QUESTION_PREFETCH for background buffer top-ups, QUESTION_GENERATION otherwise (spec §28/§34). */
+  purpose?: "QUESTION_GENERATION" | "REMEDIATION" | "ACTIVE_RECALL_QUESTION_PREFETCH";
   /** Question ids already shown in the current session — never reused within it (spec §24). */
   excludeQuestionIds?: string[];
 }

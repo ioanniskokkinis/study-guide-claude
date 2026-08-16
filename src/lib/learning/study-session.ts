@@ -13,7 +13,8 @@ import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import { buildHintGenerationPrompt, HintGenerationSchema } from "@/lib/ai/prompts/hint-generation";
-import { evaluateAnswer, type AnswerEvaluationResult } from "@/lib/ai/answer-evaluator";
+import { evaluateAnswer, AnswerEvaluationTimeoutError, type AnswerEvaluationResult } from "@/lib/ai/answer-evaluator";
+import { bucketForStatus } from "@/lib/services/student-knowledge";
 import { recordLearningOutcome, type MistakeInput } from "./record-outcome";
 import {
   getNextLearningAction,
@@ -21,10 +22,16 @@ import {
   NoConceptsAvailableError,
   type NextLearningAction,
 } from "./adaptive-engine";
-import { getOrGenerateQuestion } from "./question-generator";
 import { clampDifficulty, selectDifficultyForConcept } from "./difficulty-engine";
+import {
+  createSessionQuestion,
+  generateForAction,
+  QuestionGenerationFailedError,
+  type QuestionGenerationPurpose,
+} from "./question-serving";
+import { ensurePrefetchBuffer, invalidateStaleBufferForConcept } from "./question-prefetch";
 
-export { NoConceptsAvailableError };
+export { NoConceptsAvailableError, QuestionGenerationFailedError };
 
 // ---------------------------------------------------------------------------
 // Errors — business-rule violations, distinct from "not found/not owned"
@@ -40,12 +47,6 @@ export class SessionNotActiveError extends Error {
 export class QuestionAlreadyAnsweredError extends Error {
   constructor() {
     super("This question has already been answered.");
-  }
-}
-
-export class QuestionGenerationFailedError extends Error {
-  constructor() {
-    super("Could not generate a question right now. Please try again.");
   }
 }
 
@@ -94,53 +95,6 @@ async function loadOwnedSession(sessionId: string, userId: string): Promise<Stud
   return prisma.studySession.findFirst({ where: { id: sessionId, userId } });
 }
 
-async function nextPosition(sessionId: string): Promise<number> {
-  const last = await prisma.studySessionQuestion.findFirst({
-    where: { sessionId },
-    orderBy: { position: "desc" },
-    select: { position: true },
-  });
-  return (last?.position ?? 0) + 1;
-}
-
-/** Generates/reuses a question for the adaptive engine's chosen `action`, falling back to a plain RECALL @ difficulty 1 once if the first attempt is refused (spec §17: no complex remediation chains). */
-async function generateForAction(
-  courseId: string,
-  userId: string,
-  action: NextLearningAction,
-  excludeQuestionIds: string[],
-  purpose: "QUESTION_GENERATION" | "REMEDIATION",
-): Promise<Question> {
-  const primary = await getOrGenerateQuestion({
-    courseId,
-    conceptId: action.conceptId,
-    type: action.suggestedQuestionType,
-    difficulty: action.difficulty,
-    userId,
-    purpose,
-    excludeQuestionIds,
-  });
-  if (primary) return primary;
-
-  const fallback = await getOrGenerateQuestion({
-    courseId,
-    conceptId: action.conceptId,
-    type: "RECALL",
-    difficulty: 1,
-    userId,
-    purpose,
-    excludeQuestionIds,
-  });
-  if (fallback) return fallback;
-
-  throw new QuestionGenerationFailedError();
-}
-
-async function createSessionQuestion(sessionId: string, questionId: string, reason: string): Promise<StudySessionQuestion> {
-  const position = await nextPosition(sessionId);
-  return prisma.studySessionQuestion.create({ data: { sessionId, questionId, position, reason } });
-}
-
 // ---------------------------------------------------------------------------
 // Session lifecycle
 // ---------------------------------------------------------------------------
@@ -179,6 +133,10 @@ export async function getOrStartSession(userId: string, courseId: string): Promi
     data: { userId, courseId, targetLength: env.DEFAULT_RECALL_SESSION_LENGTH },
   });
   await createSessionQuestion(session.id, question.id, action.reason.message);
+
+  // Non-blocking (spec §29 — starting a session must never wait on this):
+  // top up the buffer beyond the one question just generated synchronously.
+  void ensurePrefetchBuffer(session.id, userId).catch(() => {});
 
   return getSessionState(session.id, userId);
 }
@@ -226,6 +184,8 @@ export async function startSessionForConcept(userId: string, courseId: string, c
   });
   await createSessionQuestion(session.id, question.id, action.reason.message);
 
+  void ensurePrefetchBuffer(session.id, userId).catch(() => {});
+
   return getSessionState(session.id, userId);
 }
 
@@ -242,16 +202,27 @@ export async function getActiveSessionId(userId: string, courseId: string): Prom
   return session?.id ?? null;
 }
 
-/** Reconstructs the session's current state entirely from persisted rows — safe to call after any page refresh. Returns null if not found/owned. */
+/**
+ * Reconstructs the session's current state entirely from persisted rows —
+ * safe to call after any page refresh. Prefers the earliest not-yet-
+ * answered question (position ascending) over the newest row, since
+ * prefetch (Phase 17 §4-6) can mean several unanswered rows already exist
+ * ahead of the one the student should actually see next; falls back to the
+ * most recent row overall so a refresh right after submitting (before
+ * advancing to "next") still shows that answer's feedback instead of
+ * nothing. Returns null if not found/owned.
+ */
 export async function getSessionState(sessionId: string, userId: string): Promise<SessionState | null> {
   const session = await loadOwnedSession(sessionId, userId);
   if (!session) return null;
 
-  const currentSessionQuestion = await prisma.studySessionQuestion.findFirst({
-    where: { sessionId },
-    orderBy: { position: "desc" },
-    include: { question: { include: { concept: { select: { name: true } } } }, answer: true },
-  });
+  const include = { question: { include: { concept: { select: { name: true } } } }, answer: true } as const;
+  const currentSessionQuestion =
+    (await prisma.studySessionQuestion.findFirst({
+      where: { sessionId, answeredAt: null },
+      orderBy: { position: "asc" },
+      include,
+    })) ?? (await prisma.studySessionQuestion.findFirst({ where: { sessionId }, orderBy: { position: "desc" }, include }));
 
   return { session, currentSessionQuestion, targetLength: session.targetLength };
 }
@@ -274,17 +245,122 @@ export interface SubmitAnswerInput {
 
 export interface SubmitAnswerResult {
   answer: Answer;
-  evaluation: AnswerEvaluationResult;
   session: StudySession;
+  /** The persisted model/expected answer (Phase 17 §7) — always available immediately, never requires a Claude call. */
+  modelAnswer: string | null;
+  rubric: string[];
+}
+
+function normalizeAnswerText(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Deterministic fast path (Phase 17 §15): an answer that's an exact, normalized match with the persisted model answer never needs Claude's semantic judgment. Every other case still does — this is a narrow shortcut, not a replacement for evaluation. */
+function isExactMatch(answerText: string, expectedAnswer: string | null): boolean {
+  if (!expectedAnswer || expectedAnswer.trim().length === 0) return false;
+  return normalizeAnswerText(answerText) === normalizeAnswerText(expectedAnswer);
+}
+
+async function resolveSourceChunks(sourceReferences: Prisma.JsonValue): Promise<Array<{ id: string; text: string }>> {
+  const ids = Array.isArray(sourceReferences) ? (sourceReferences as string[]) : [];
+  if (ids.length === 0) return [];
+  const chunks = await prisma.documentChunk.findMany({ where: { id: { in: ids } }, select: { id: true, text: true } });
+  return chunks;
 }
 
 /**
- * Validates the answer belongs to an active session the caller owns,
- * persists it immediately (so nothing is lost if evaluation fails — spec
- * §37), evaluates it with Claude, and — only on evaluation success — routes
- * the result through recordLearningOutcome() (Phase 4) to update mastery.
- * Never trusts a client-supplied userId; every id is re-verified against
- * the actual session/question ownership chain (spec §36).
+ * Writes a resolved AnswerEvaluationResult onto the Answer row, records the
+ * learning outcome (Phase 4) exactly once, and — only when this evaluation
+ * actually changed the concept's mastery bucket — invalidates prefetched
+ * questions that were generated against the now-stale state (Phase 17
+ * §20/§25). Callers (the deterministic fast path and evaluateSubmittedAnswer)
+ * are both responsible for their own answeredAt/questionsAnswered bookkeeping
+ * — this only ever touches questionsCorrect, never questionsAnswered, so it
+ * can't double-count a question the caller already marked answered.
+ */
+async function settleEvaluation(params: {
+  userId: string;
+  sessionId: string;
+  session: StudySession;
+  sessionQuestion: StudySessionQuestion;
+  question: Question;
+  answer: Answer;
+  evaluation: AnswerEvaluationResult;
+  normalizedConfidence: number | null;
+  durationSeconds: number | null;
+}): Promise<{ answer: Answer; session: StudySession }> {
+  const { evaluation, question, sessionQuestion } = params;
+
+  const previousMastery = await prisma.studentConceptMastery.findUnique({
+    where: { userId_conceptId: { userId: params.userId, conceptId: question.conceptId } },
+    select: { status: true },
+  });
+
+  const outcome = await recordLearningOutcome({
+    userId: params.userId,
+    conceptId: question.conceptId,
+    activityType: activityTypeForQuestionType(question.type),
+    score: evaluation.score,
+    confidence: params.normalizedConfidence,
+    outcome: evaluation.outcome,
+    difficulty: question.difficulty,
+    usedHint: sessionQuestion.hintsUsed > 0,
+    revealedAnswer: sessionQuestion.revealed,
+    durationSeconds: params.durationSeconds,
+    mistakes: buildMistakeInputs(evaluation),
+    sourceType: "QUESTION",
+    notes: evaluation.feedback,
+  });
+  if (!outcome) throw new SessionNotActiveError();
+
+  const [updatedAnswer, , updatedSession] = await prisma.$transaction([
+    prisma.answer.update({
+      where: { id: params.answer.id },
+      data: {
+        score: evaluation.score,
+        correctness: evaluation.outcome,
+        reasoningQuality: evaluation.reasoningQuality,
+        completeness: evaluation.completeness,
+        strengths: evaluation.strengths,
+        missingPoints: evaluation.missingPoints,
+        errors: evaluation.errors as unknown as Prisma.InputJsonValue,
+        misconceptions: evaluation.misconceptions as unknown as Prisma.InputJsonValue,
+        feedback: evaluation.feedback,
+        correctAnswer: evaluation.correctAnswer,
+        needsRemediation: evaluation.needsRemediation,
+        prerequisiteGapConceptId: evaluation.prerequisiteGapConceptId,
+        attemptId: outcome.attempt.id,
+        evaluationStatus: "COMPLETED",
+        evaluationError: null,
+      },
+    }),
+    prisma.studySessionQuestion.update({ where: { id: sessionQuestion.id }, data: { attemptId: outcome.attempt.id } }),
+    prisma.studySession.update({
+      where: { id: params.session.id },
+      data: { questionsCorrect: { increment: evaluation.correctness === "CORRECT" ? 1 : 0 } },
+    }),
+  ]);
+
+  const previousBucket = previousMastery ? bucketForStatus(previousMastery.status) : "unknown";
+  const newBucket = bucketForStatus(outcome.mastery.status);
+  if (previousBucket !== newBucket) {
+    void invalidateStaleBufferForConcept(params.sessionId, question.conceptId, params.userId).catch(() => {});
+  }
+
+  return { answer: updatedAnswer, session: updatedSession };
+}
+
+/**
+ * Validates the answer belongs to an active session the caller owns and
+ * persists it immediately — independent of AI evaluation (Phase 17 §17):
+ * this function never calls Claude, so it can never be the reason the UI
+ * hangs. `answeredAt`/`questionsAnswered` are finalized right here, not on
+ * evaluation success, so the student can always continue even if evaluation
+ * never resolves (§38). The response always carries the model answer
+ * (already persisted on the Question row — §7) so the UI can show it before
+ * evaluation has even started. Never trusts a client-supplied userId; every
+ * id is re-verified against the actual session/question ownership chain
+ * (spec §36).
  */
 export async function submitAnswer(input: SubmitAnswerInput): Promise<SubmitAnswerResult> {
   const session = await loadOwnedSession(input.sessionId, input.userId);
@@ -306,37 +382,104 @@ export async function submitAnswer(input: SubmitAnswerInput): Promise<SubmitAnsw
   }
 
   const normalizedConfidence = input.confidence != null ? normalizeConfidence(input.confidence) : null;
+  const question = sessionQuestion.question;
 
-  // Persist the raw submission first — evaluation failure below must never
-  // lose it. If a previous attempt on this question already failed
-  // evaluation, update that row instead of creating a second one: the
-  // unique constraint on sessionQuestionId means a second create() here
-  // would throw, and this is exactly the retry path spec §37 asks for.
-  const pending = await prisma.answer.findUnique({ where: { sessionQuestionId: sessionQuestion.id } });
-  const answer = pending
-    ? await prisma.answer.update({
-        where: { id: pending.id },
-        data: {
-          answerText,
-          confidence: normalizedConfidence,
-          usedHint: sessionQuestion.hintsUsed > 0,
-          revealedAnswer: sessionQuestion.revealed,
-          durationSeconds: input.durationSeconds ?? null,
-          evaluationError: null,
-        },
-      })
-    : await prisma.answer.create({
-        data: {
-          questionId: sessionQuestion.questionId,
-          userId: input.userId,
-          sessionQuestionId: sessionQuestion.id,
-          answerText,
-          confidence: normalizedConfidence,
-          usedHint: sessionQuestion.hintsUsed > 0,
-          revealedAnswer: sessionQuestion.revealed,
-          durationSeconds: input.durationSeconds ?? null,
-        },
-      });
+  const answer = await prisma.answer.create({
+    data: {
+      questionId: sessionQuestion.questionId,
+      userId: input.userId,
+      sessionQuestionId: sessionQuestion.id,
+      answerText,
+      confidence: normalizedConfidence,
+      usedHint: sessionQuestion.hintsUsed > 0,
+      revealedAnswer: sessionQuestion.revealed,
+      durationSeconds: input.durationSeconds ?? null,
+    },
+  });
+
+  const [, updatedSession] = await prisma.$transaction([
+    prisma.studySessionQuestion.update({ where: { id: sessionQuestion.id }, data: { answeredAt: new Date() } }),
+    prisma.studySession.update({ where: { id: session.id }, data: { questionsAnswered: { increment: 1 } } }),
+  ]);
+
+  let finalAnswer = answer;
+  let finalSession = updatedSession;
+
+  if (isExactMatch(answerText, question.expectedAnswer)) {
+    const evaluation: AnswerEvaluationResult = {
+      score: 1,
+      correctness: "CORRECT",
+      outcome: "SUCCESS",
+      reasoningQuality: 1,
+      completeness: 1,
+      strengths: [],
+      missingPoints: [],
+      errors: [],
+      misconceptions: [],
+      feedback: "Matches the model answer exactly.",
+      correctAnswer: question.expectedAnswer ?? "",
+      needsRemediation: false,
+      prerequisiteGapConceptId: null,
+    };
+    const settled = await settleEvaluation({
+      userId: input.userId,
+      sessionId: session.id,
+      session: updatedSession,
+      sessionQuestion,
+      question,
+      answer,
+      evaluation,
+      normalizedConfidence,
+      durationSeconds: input.durationSeconds ?? null,
+    });
+    finalAnswer = settled.answer;
+    finalSession = settled.session;
+  }
+
+  void ensurePrefetchBuffer(session.id, input.userId).catch(() => {});
+
+  return {
+    answer: finalAnswer,
+    session: finalSession,
+    modelAnswer: question.expectedAnswer,
+    rubric: Array.isArray(question.rubric) ? (question.rubric as string[]) : [],
+  };
+}
+
+export interface EvaluateSubmittedAnswerResult {
+  answer: Answer;
+  session: StudySession;
+}
+
+/**
+ * Runs (or re-runs) Claude evaluation for an already-persisted answer
+ * (Phase 17 §13/§18). Idempotent: if this answer's evaluation already
+ * COMPLETED — including a deterministic fast-path match from submitAnswer,
+ * or a revealed answer — it returns the cached result without calling
+ * Claude or recordLearningOutcome() again. A timeout or other failure never
+ * throws an HTTP-level error; it settles the answer into a terminal TIMEOUT/
+ * FAILED state and returns normally so the UI can offer Retry/Continue
+ * without fabricating a CORRECT/INCORRECT outcome (§60).
+ */
+export async function evaluateSubmittedAnswer(params: {
+  sessionId: string;
+  userId: string;
+  sessionQuestionId: string;
+}): Promise<EvaluateSubmittedAnswerResult> {
+  const session = await loadOwnedSession(params.sessionId, params.userId);
+  if (!session) throw new SessionNotActiveError();
+
+  const sessionQuestion = await prisma.studySessionQuestion.findFirst({
+    where: { id: params.sessionQuestionId, sessionId: session.id },
+    include: { question: true, answer: true },
+  });
+  if (!sessionQuestion) throw new SessionNotActiveError();
+  const answer = sessionQuestion.answer;
+  if (!answer) throw new Error("Submit an answer before requesting evaluation.");
+
+  if (answer.evaluationStatus === "COMPLETED") {
+    return { answer, session };
+  }
 
   const question = sessionQuestion.question;
   const concept = await prisma.concept.findUniqueOrThrow({ where: { id: question.conceptId } });
@@ -360,73 +503,37 @@ export async function submitAnswer(input: SubmitAnswerInput): Promise<SubmitAnsw
       rubric: Array.isArray(question.rubric) ? (question.rubric as string[]) : [],
       sourceChunks,
       knownPrerequisites: prerequisiteEdges.map((e) => ({ id: e.sourceConceptId, name: e.sourceConcept.name })),
-      studentAnswer: answerText,
-      studentConfidence: normalizedConfidence,
-      userId: input.userId,
+      studentAnswer: answer.answerText,
+      studentConfidence: answer.confidence,
+      userId: params.userId,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Evaluation failed.";
-    await prisma.answer.update({ where: { id: answer.id }, data: { evaluationError: message } });
-    throw new Error("We couldn't evaluate this answer right now. Your answer has been saved. Please try again.");
+    const timedOut = error instanceof AnswerEvaluationTimeoutError;
+    const message = timedOut
+      ? "We couldn't evaluate your answer in time."
+      : error instanceof Error
+        ? error.message
+        : "Evaluation failed.";
+    const updatedAnswer = await prisma.answer.update({
+      where: { id: answer.id },
+      data: { evaluationError: message, evaluationStatus: timedOut ? "TIMEOUT" : "FAILED" },
+    });
+    return { answer: updatedAnswer, session };
   }
 
-  const outcome = await recordLearningOutcome({
-    userId: input.userId,
-    conceptId: question.conceptId,
-    activityType: activityTypeForQuestionType(question.type),
-    score: evaluation.score,
-    confidence: normalizedConfidence,
-    outcome: evaluation.outcome,
-    difficulty: question.difficulty,
-    usedHint: sessionQuestion.hintsUsed > 0,
-    revealedAnswer: sessionQuestion.revealed,
-    durationSeconds: input.durationSeconds ?? null,
-    mistakes: buildMistakeInputs(evaluation),
-    sourceType: "QUESTION",
-    notes: evaluation.feedback,
+  const settled = await settleEvaluation({
+    userId: params.userId,
+    sessionId: session.id,
+    session,
+    sessionQuestion,
+    question,
+    answer,
+    evaluation,
+    normalizedConfidence: answer.confidence,
+    durationSeconds: answer.durationSeconds,
   });
-  if (!outcome) throw new SessionNotActiveError();
 
-  const [updatedAnswer, , updatedSession] = await prisma.$transaction([
-    prisma.answer.update({
-      where: { id: answer.id },
-      data: {
-        score: evaluation.score,
-        correctness: evaluation.outcome,
-        reasoningQuality: evaluation.reasoningQuality,
-        completeness: evaluation.completeness,
-        strengths: evaluation.strengths,
-        missingPoints: evaluation.missingPoints,
-        errors: evaluation.errors as unknown as Prisma.InputJsonValue,
-        misconceptions: evaluation.misconceptions as unknown as Prisma.InputJsonValue,
-        feedback: evaluation.feedback,
-        correctAnswer: evaluation.correctAnswer,
-        needsRemediation: evaluation.needsRemediation,
-        prerequisiteGapConceptId: evaluation.prerequisiteGapConceptId,
-        attemptId: outcome.attempt.id,
-      },
-    }),
-    prisma.studySessionQuestion.update({
-      where: { id: sessionQuestion.id },
-      data: { answeredAt: new Date(), attemptId: outcome.attempt.id },
-    }),
-    prisma.studySession.update({
-      where: { id: session.id },
-      data: {
-        questionsAnswered: { increment: 1 },
-        questionsCorrect: { increment: evaluation.correctness === "CORRECT" ? 1 : 0 },
-      },
-    }),
-  ]);
-
-  return { answer: updatedAnswer, evaluation, session: updatedSession };
-}
-
-async function resolveSourceChunks(sourceReferences: Prisma.JsonValue): Promise<Array<{ id: string; text: string }>> {
-  const ids = Array.isArray(sourceReferences) ? (sourceReferences as string[]) : [];
-  if (ids.length === 0) return [];
-  const chunks = await prisma.documentChunk.findMany({ where: { id: { in: ids } }, select: { id: true, text: true } });
-  return chunks;
+  return { answer: settled.answer, session: settled.session };
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +637,10 @@ export async function revealAnswer(params: {
       feedback: "You revealed the answer instead of attempting retrieval.",
       correctAnswer: question.expectedAnswer,
       attemptId: outcome.attempt.id,
+      // No Claude evaluation ever runs for a revealed answer (§21) — it's
+      // terminal from the moment it's created, so a retry/evaluate call
+      // against this sessionQuestion is a correctly-idempotent no-op.
+      evaluationStatus: "COMPLETED",
     },
   });
 
@@ -553,7 +664,16 @@ export async function revealAnswer(params: {
 
 export interface NextQuestionResult {
   sessionQuestion: StudySessionQuestion & { question: Question & { concept: { name: string } } };
-  action: NextLearningAction;
+  /** Null when served from the prefetch buffer (Phase 17 §22) — no fresh adaptive-engine decision was made for this specific serve, the one that generated the buffered question already ran and was logged at prefetch time. */
+  action: NextLearningAction | null;
+  /** Dev-visible signal only (Phase 17 §45) — not used by the current UI. */
+  source: "BUFFER" | "GENERATED";
+}
+
+/** Development-only diagnostics (Phase 17 §45) — never the student's answer text or any other private content. */
+function logActiveRecallTelemetry(params: { sessionId: string; questionSource: "READY_DB" | "GENERATED"; prefetched: boolean }): void {
+  if (process.env.NODE_ENV === "production") return;
+  console.log(`[ACTIVE_RECALL] session=${params.sessionId} questionSource=${params.questionSource} prefetched=${params.prefetched}`);
 }
 
 /** Builds a direct, engine-bypassing retry action (spec §17) — "Try Again" is a user override of the recommendation, not a fresh adaptive decision, so it never touches AdaptiveDecisionLog. */
@@ -618,19 +738,37 @@ export async function nextQuestion(params: {
   if (!session || session.status !== "ACTIVE") throw new SessionNotActiveError();
   if (session.questionsAnswered >= session.targetLength) throw new SessionCompleteError();
 
+  // Instant path (Phase 17 §22-23): a "Try Again" always bypasses the
+  // buffer (it wants a fresh, engine-bypassing retry action on purpose —
+  // spec §17), but a normal "next" first checks for an already-prefetched,
+  // ready question before ever considering generation.
+  if (!params.retry) {
+    const buffered = await prisma.studySessionQuestion.findFirst({
+      where: { sessionId: session.id, answeredAt: null },
+      orderBy: { position: "asc" },
+      include: { question: { include: { concept: { select: { name: true } } } } },
+    });
+    if (buffered) {
+      void ensurePrefetchBuffer(session.id, params.userId).catch(() => {});
+      logActiveRecallTelemetry({ sessionId: session.id, questionSource: "READY_DB", prefetched: true });
+      return { sessionQuestion: buffered, action: null, source: "BUFFER" };
+    }
+  }
+
+  // Buffer empty (or an explicit retry) — fall back to on-demand
+  // generation exactly as before prefetching existed.
   const previous = await prisma.studySessionQuestion.findFirst({
-    where: { sessionId: session.id },
+    where: { sessionId: session.id, answeredAt: { not: null } },
     orderBy: { position: "desc" },
     include: { question: true, answer: true },
   });
-  if (previous && !previous.answeredAt) throw new Error("Answer the current question before requesting the next one.");
 
   const askedQuestionIds = (
     await prisma.studySessionQuestion.findMany({ where: { sessionId: session.id }, select: { questionId: true } })
   ).map((q) => q.questionId);
 
   let action: NextLearningAction;
-  let purpose: "QUESTION_GENERATION" | "REMEDIATION" = "QUESTION_GENERATION";
+  let purpose: QuestionGenerationPurpose = "QUESTION_GENERATION";
 
   if (params.retry && previous) {
     purpose = "REMEDIATION";
@@ -647,9 +785,13 @@ export async function nextQuestion(params: {
   const question = await generateForAction(session.courseId, params.userId, action, askedQuestionIds, purpose);
   const sessionQuestion = await createSessionQuestion(session.id, question.id, action.reason.message);
 
+  void ensurePrefetchBuffer(session.id, params.userId).catch(() => {});
+  logActiveRecallTelemetry({ sessionId: session.id, questionSource: "GENERATED", prefetched: false });
+
   return {
     sessionQuestion: { ...sessionQuestion, question: { ...question, concept: { name: action.conceptName } } },
     action,
+    source: "GENERATED",
   };
 }
 
@@ -738,9 +880,6 @@ export function studySessionErrorStatus(error: unknown): { status: number; messa
   if (error instanceof QuestionAlreadyAnsweredError) return { status: 409, message: error.message };
   if (error instanceof SessionCompleteError) return { status: 409, message: error.message };
   if (error instanceof QuestionGenerationFailedError) return { status: 502, message: error.message };
-  if (error instanceof Error && error.message.startsWith("We couldn't evaluate")) {
-    return { status: 502, message: error.message };
-  }
   if (error instanceof Error && (error.message.includes("Answer") || error.message.includes("Confidence"))) {
     return { status: 400, message: error.message };
   }

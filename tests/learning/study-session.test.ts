@@ -1,11 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/ai/claude", () => ({ extractStructured: vi.fn() }));
+vi.mock("@/lib/ai/claude", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ai/claude")>("@/lib/ai/claude");
+  return { ...actual, extractStructured: vi.fn() };
+});
 
-import { extractStructured } from "@/lib/ai/claude";
+import { AiRequestTimeoutError, extractStructured } from "@/lib/ai/claude";
 import { prisma } from "@/lib/db/prisma";
 import {
   completeSession,
+  evaluateSubmittedAnswer,
   getOrStartSession,
   getSessionState,
   nextQuestion,
@@ -161,15 +165,22 @@ describe("study-session (Active Recall)", () => {
     const evidenceBefore = await prisma.knowledgeEvidence.count({ where: { userId, conceptId } });
     const mistakesBefore = await prisma.studentMistake.count({ where: { userId, conceptId } });
 
-    const result = await submitAnswer({
+    const submitted = await submitAnswer({
       sessionId: state!.session.id,
       userId,
       sessionQuestionId: sq.id,
       answerText: "It tracks connection state but I forgot about timeouts.",
       confidence: 4,
     });
+    // Not an exact match with the model answer, so submitAnswer() alone never calls Claude — evaluation is a separate step (Phase 17 §13).
+    expect(submitted.answer.evaluationStatus).toBe("PENDING");
+    expect(submitted.answer.attemptId).toBeNull();
+    expect(submitted.modelAnswer).toBe("Connection state.");
 
-    expect(result.evaluation.correctness).toBe("PARTIAL");
+    const result = await evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id });
+
+    expect(result.answer.correctness).toBe("PARTIAL");
+    expect(result.answer.evaluationStatus).toBe("COMPLETED");
     expect(result.answer.attemptId).toBeTruthy();
 
     const [attemptsAfter, evidenceAfter, mistakesAfter, mastery] = await Promise.all([
@@ -186,6 +197,104 @@ describe("study-session (Active Recall)", () => {
     expect(mastery!.exposureCount).toBeGreaterThan(0);
 
     evaluationOverride = null;
+    await completeSession(state!.session.id, userId);
+  });
+
+  it("deterministic fast path: an answer that exactly matches the model answer settles immediately without calling Claude for evaluation (Phase 17 §15)", async () => {
+    const state = await getOrStartSession(userId, courseId);
+    const sq = state!.currentSessionQuestion!;
+
+    const result = await submitAnswer({
+      sessionId: state!.session.id,
+      userId,
+      sessionQuestionId: sq.id,
+      answerText: "Connection state.", // exact match with the mocked expectedAnswer
+    });
+
+    expect(result.answer.evaluationStatus).toBe("COMPLETED");
+    expect(result.answer.correctness).toBe("SUCCESS");
+    expect(result.answer.attemptId).toBeTruthy();
+    expect(vi.mocked(extractStructured).mock.calls.some((c) => c[0].requestType === "ANSWER_EVALUATION")).toBe(false);
+
+    await completeSession(state!.session.id, userId);
+  });
+
+  it("evaluateSubmittedAnswer is idempotent: a retry after success reuses the cached result instead of calling Claude or recordLearningOutcome again", async () => {
+    const state = await getOrStartSession(userId, courseId);
+    const sq = state!.currentSessionQuestion!;
+
+    await submitAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id, answerText: "It tracks connection state." });
+    const first = await evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id });
+    expect(first.answer.evaluationStatus).toBe("COMPLETED");
+
+    const attemptsAfterFirst = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+    const evalCallsAfterFirst = vi.mocked(extractStructured).mock.calls.filter((c) => c[0].requestType === "ANSWER_EVALUATION").length;
+
+    const second = await evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id });
+    expect(second.answer.id).toBe(first.answer.id);
+    expect(second.answer.attemptId).toBe(first.answer.attemptId);
+
+    const attemptsAfterSecond = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+    const evalCallsAfterSecond = vi.mocked(extractStructured).mock.calls.filter((c) => c[0].requestType === "ANSWER_EVALUATION").length;
+    expect(attemptsAfterSecond).toBe(attemptsAfterFirst);
+    expect(evalCallsAfterSecond).toBe(evalCallsAfterFirst);
+
+    await completeSession(state!.session.id, userId);
+  });
+
+  it("a Claude timeout settles the answer into a recoverable TIMEOUT state, never fabricates mastery evidence, and a subsequent retry can still succeed", async () => {
+    const state = await getOrStartSession(userId, courseId);
+    const sq = state!.currentSessionQuestion!;
+
+    const submitted = await submitAnswer({
+      sessionId: state!.session.id,
+      userId,
+      sessionQuestionId: sq.id,
+      answerText: "It tracks connection state (not an exact model-answer match).",
+    });
+    expect(submitted.answer.evaluationStatus).toBe("PENDING");
+
+    // A targeted, requestType-scoped override — a plain mockImplementationOnce would risk being
+    // consumed by an unrelated, concurrently-firing background prefetch QUESTION_GENERATION call
+    // instead of the ANSWER_EVALUATION call this test actually cares about.
+    let timeoutArmed = true;
+    vi.mocked(extractStructured).mockImplementation(async (options: { requestType: string }) => {
+      if (options.requestType === "ANSWER_EVALUATION" && timeoutArmed) {
+        timeoutArmed = false;
+        throw new AiRequestTimeoutError(20_000);
+      }
+      if (options.requestType === "ANSWER_EVALUATION") {
+        return { data: currentEvaluation(), usage: { inputTokens: 1, outputTokens: 1 } };
+      }
+      return {
+        data: {
+          canGenerate: true,
+          prompt: QUESTION_PROMPTS[promptIndex++ % QUESTION_PROMPTS.length],
+          expectedAnswer: "Connection state.",
+          rubric: ["Mentions connection state"],
+          sourceChunkIds: [chunkId],
+        },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    });
+
+    const attemptsBefore = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+    const timedOut = await evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id });
+    expect(timedOut.answer.evaluationStatus).toBe("TIMEOUT");
+    expect(timedOut.answer.correctness).toBeNull();
+    expect(timedOut.answer.attemptId).toBeNull();
+
+    const attemptsAfterTimeout = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+    expect(attemptsAfterTimeout).toBe(attemptsBefore); // no fabricated evidence
+
+    // Retry — the mock now resolves normally again (only the previous call was overridden `Once`).
+    const retried = await evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id });
+    expect(retried.answer.evaluationStatus).toBe("COMPLETED");
+    expect(retried.answer.attemptId).toBeTruthy();
+
+    const attemptsAfterRetry = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+    expect(attemptsAfterRetry).toBe(attemptsBefore + 1); // exactly one attempt from the eventual success, none from the timeout
+
     await completeSession(state!.session.id, userId);
   });
 
@@ -210,14 +319,15 @@ describe("study-session (Active Recall)", () => {
     expect(hintResult.hint.length).toBeGreaterThan(0);
     expect(hintResult.hintsUsed).toBe(1);
 
-    const result = await submitAnswer({
+    const submitted = await submitAnswer({
       sessionId: state!.session.id,
       userId,
       sessionQuestionId: sq.id,
       answerText: "Connection state, thanks to the hint.",
     });
+    expect(submitted.answer.usedHint).toBe(true);
 
-    expect(result.answer.usedHint).toBe(true);
+    const result = await evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id });
     const attempt = await prisma.learningAttempt.findUnique({ where: { id: result.answer.attemptId! } });
     expect(attempt!.usedHint).toBe(true);
 

@@ -510,6 +510,17 @@ model Question {
   @@map("questions")
 }
 
+/// Phase 17 §19 — the answer/evaluate split's terminal-state tracker. PENDING
+/// means the answer is persisted but Claude hasn't judged it yet (or a prior
+/// attempt is being retried); COMPLETED/FAILED/TIMEOUT are all terminal —
+/// the UI must never be stuck showing "evaluating" once one of these is set.
+enum AnswerEvaluationStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  TIMEOUT
+}
+
 model Answer {
   id                String  @id @default(cuid())
   questionId        String
@@ -546,9 +557,14 @@ model Answer {
   revealedAnswer Boolean @default(false)
 
   durationSeconds Int?
-  /// Set if AI evaluation failed after retries — the answer is preserved
-  /// so nothing is lost, and evaluation can be retried (spec §37).
+  /// Set if AI evaluation failed/timed out — the answer is preserved
+  /// so nothing is lost, and evaluation can be retried (Phase 17 §17/§37).
   evaluationError String?
+  /// Terminal-state tracker for the answer/evaluate split (Phase 17 §19):
+  /// PENDING until an evaluation attempt resolves, then COMPLETED/FAILED/
+  /// TIMEOUT. Evaluation and recordLearningOutcome() only ever run once —
+  /// callers check this before re-evaluating (idempotent retry, §18).
+  evaluationStatus AnswerEvaluationStatus @default(PENDING)
   /// Set once recordLearningOutcome() has run for this answer — the resulting attempt/evidence/mastery update.
   attemptId       String?
 
@@ -641,6 +657,12 @@ model StudySessionQuestion {
   answer   Answer?
 
   @@unique([sessionId, position])
+  /// Phase 17 §10 — the same question can never be attached to one session
+  /// twice, including under the race between two concurrent prefetch calls
+  /// (or a live "next" call landing at the same moment as a background
+  /// top-up) both reusing the same existing Question row. The database is
+  /// the single source of truth here, not an in-app lock.
+  @@unique([sessionId, questionId])
   @@index([sessionId])
   @@index([questionId])
   @@map("study_session_questions")

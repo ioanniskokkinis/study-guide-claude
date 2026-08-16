@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/ai/claude", () => ({ extractStructured: vi.fn() }));
+vi.mock("@/lib/ai/claude", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ai/claude")>("@/lib/ai/claude");
+  return { ...actual, extractStructured: vi.fn() };
+});
 
 import { extractStructured } from "@/lib/ai/claude";
 import { prisma } from "@/lib/db/prisma";
-import { submitAnswer } from "@/lib/learning/study-session";
+import { evaluateSubmittedAnswer, submitAnswer } from "@/lib/learning/study-session";
 import {
   completeReviewSession,
   getActiveReviewSessionId,
@@ -251,7 +254,8 @@ describe("review-orchestrator (Phase 9)", () => {
       const sessionQuestionId = start!.currentSessionQuestion!.id;
 
       evaluationOverride = { score: 0.9, correctness: "CORRECT" };
-      const answerResult = await submitAnswer({ sessionId, userId, sessionQuestionId, answerText: "It tracks connection state." });
+      await submitAnswer({ sessionId, userId, sessionQuestionId, answerText: "It tracks connection state." });
+      const answerResult = await evaluateSubmittedAnswer({ sessionId, userId, sessionQuestionId });
       expect(answerResult.answer.attemptId).not.toBeNull();
 
       const attemptCountBefore = await prisma.learningAttempt.count({ where: { userId, conceptId } });
@@ -281,6 +285,7 @@ describe("review-orchestrator (Phase 9)", () => {
 
       evaluationOverride = { score: 0.1, correctness: "INCORRECT" };
       await submitAnswer({ sessionId, userId, sessionQuestionId, answerText: "Not sure." });
+      await evaluateSubmittedAnswer({ sessionId, userId, sessionQuestionId });
 
       const rating = await submitReviewRating({ sessionId, userId, sessionQuestionId, outcome: "AGAIN" });
       expect(rating.reviewItem.lapseCount).toBe(1);
@@ -300,6 +305,7 @@ describe("review-orchestrator (Phase 9)", () => {
 
       evaluationOverride = { score: 0.9, correctness: "CORRECT" };
       await submitAnswer({ sessionId, userId, sessionQuestionId, answerText: "It tracks connection state." });
+      await evaluateSubmittedAnswer({ sessionId, userId, sessionQuestionId });
 
       const first = await submitReviewRating({ sessionId, userId, sessionQuestionId, outcome: "GOOD" });
       const second = await submitReviewRating({ sessionId, userId, sessionQuestionId, outcome: "EASY" }); // even a different claimed outcome must not double-apply
@@ -327,6 +333,7 @@ describe("review-orchestrator (Phase 9)", () => {
 
       evaluationOverride = { score: 0.9, correctness: "CORRECT" };
       await submitAnswer({ sessionId, userId, sessionQuestionId, answerText: "It tracks connection state." });
+      await evaluateSubmittedAnswer({ sessionId, userId, sessionQuestionId });
 
       await expect(nextReviewQuestion(sessionId, userId)).rejects.toThrow(ReviewNotRatedError);
 
@@ -345,6 +352,7 @@ describe("review-orchestrator (Phase 9)", () => {
 
       evaluationOverride = { score: 0.9, correctness: "CORRECT" };
       await submitAnswer({ sessionId, userId, sessionQuestionId, answerText: "It tracks connection state." });
+      await evaluateSubmittedAnswer({ sessionId, userId, sessionQuestionId });
       await submitReviewRating({ sessionId, userId, sessionQuestionId, outcome: "EASY" });
 
       const summary = await completeReviewSession(sessionId, userId);

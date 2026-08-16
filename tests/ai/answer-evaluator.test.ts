@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/ai/claude", () => ({ extractStructured: vi.fn() }));
+vi.mock("@/lib/ai/claude", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ai/claude")>("@/lib/ai/claude");
+  return { ...actual, extractStructured: vi.fn() };
+});
 
-import { extractStructured } from "@/lib/ai/claude";
-import { evaluateAnswer } from "@/lib/ai/answer-evaluator";
+import { AiRequestTimeoutError, extractStructured } from "@/lib/ai/claude";
+import { evaluateAnswer, AnswerEvaluationTimeoutError } from "@/lib/ai/answer-evaluator";
 
 function baseEvaluation(overrides: Record<string, unknown> = {}) {
   return {
@@ -85,5 +88,21 @@ describe("evaluateAnswer", () => {
     expect(result.errors).toHaveLength(1);
     expect(result.misconceptions).toHaveLength(1);
     expect(result.outcome).toBe("FAILURE");
+  });
+
+  it("passes AI_ACTIVE_RECALL_EVALUATION_TIMEOUT_MS through to extractStructured (Phase 17 §16)", async () => {
+    vi.mocked(extractStructured).mockResolvedValue({ data: baseEvaluation(), usage: { inputTokens: 1, outputTokens: 1 } });
+    await evaluateAnswer(baseInput);
+    expect(vi.mocked(extractStructured).mock.calls[0][0]).toMatchObject({ timeoutMs: expect.any(Number) });
+  });
+
+  it("surfaces a Claude timeout as AnswerEvaluationTimeoutError, distinguishable from a generic failure (Phase 17 §16/§19)", async () => {
+    vi.mocked(extractStructured).mockRejectedValue(new AiRequestTimeoutError(20_000));
+    await expect(evaluateAnswer(baseInput)).rejects.toBeInstanceOf(AnswerEvaluationTimeoutError);
+  });
+
+  it("does not wrap a non-timeout failure as a timeout — the caller must be able to tell them apart", async () => {
+    vi.mocked(extractStructured).mockRejectedValue(new Error("Claude returned invalid JSON."));
+    await expect(evaluateAnswer(baseInput)).rejects.not.toBeInstanceOf(AnswerEvaluationTimeoutError);
   });
 });

@@ -14,6 +14,8 @@ interface QuestionDTO {
   prompt: string;
 }
 
+type EvaluationStatus = "PENDING" | "COMPLETED" | "FAILED" | "TIMEOUT";
+
 interface AnswerDTO {
   id: string;
   score: number | null;
@@ -21,6 +23,7 @@ interface AnswerDTO {
   feedback: string | null;
   correctAnswer: string | null;
   revealedAnswer: boolean;
+  evaluationStatus: EvaluationStatus;
 }
 
 interface SessionQuestionDTO {
@@ -64,7 +67,19 @@ interface ReviewSummaryDTO {
   nextReviewAt: string | null;
 }
 
-type Phase = "checking" | "idle" | "nothing-due" | "question" | "evaluating" | "feedback" | "rating" | "rated" | "summary" | "fatal";
+type Phase =
+  | "checking"
+  | "idle"
+  | "nothing-due"
+  | "question"
+  | "evaluating"
+  | "eval_timeout"
+  | "eval_error"
+  | "feedback"
+  | "rating"
+  | "rated"
+  | "summary"
+  | "fatal";
 
 async function parseJson(response: Response) {
   return response.json().catch(() => ({}));
@@ -135,10 +150,45 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
       void loadSummary(state.session.id);
       return;
     }
-    if (state.currentSessionQuestion?.answeredAt != null && state.currentSessionQuestion?.answer) {
-      setPhase("rating");
+    const sq = state.currentSessionQuestion;
+    if (sq?.answeredAt != null && sq?.answer) {
+      const status = sq.answer.evaluationStatus;
+      if (status === "COMPLETED" || sq.answer.revealedAnswer) {
+        setPhase("rating");
+      } else if (status === "TIMEOUT") {
+        setPhase("eval_timeout");
+      } else if (status === "FAILED") {
+        setPhase("eval_error");
+      } else {
+        setPhase("evaluating");
+        void runEvaluation(state.session.id, sq.id);
+      }
     } else {
       setPhase("question");
+    }
+  }
+
+  /** Separate from submission (Phase 17 §13) — safe to call more than once (idempotent server-side). Rating requires a COMPLETED evaluation since it's what creates the underlying LearningAttempt a review rating attaches to; TIMEOUT/FAILED offers Retry rather than a Continue-without-evaluation path (unlike Active Recall, Review has no meaningful "rate without evidence" state). */
+  async function runEvaluation(sessionId: string, sessionQuestionId: string) {
+    try {
+      const response = await fetch(`/api/study-sessions/${sessionId}/answer/evaluate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionQuestionId }),
+      });
+      const body = await parseJson(response);
+      if (!response.ok) throw new Error(body.error ?? "Could not evaluate this answer.");
+
+      const answer = body.answer as AnswerDTO;
+      setSession(body.session);
+      setSessionQuestion((prev) => (prev ? { ...prev, answer } : prev));
+
+      if (answer.evaluationStatus === "COMPLETED") setPhase("rating");
+      else if (answer.evaluationStatus === "TIMEOUT") setPhase("eval_timeout");
+      else setPhase("eval_error");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not evaluate this answer.");
+      setPhase("eval_error");
     }
   }
 
@@ -183,13 +233,20 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
         body: JSON.stringify({ sessionQuestionId: sessionQuestion.id, answerText, confidence: confidence ?? undefined }),
       });
       const body = await parseJson(response);
-      if (!response.ok) throw new Error(body.error ?? "Could not evaluate this answer.");
+      if (!response.ok) throw new Error(body.error ?? "Could not save this answer.");
 
       setSession(body.session);
-      setSessionQuestion({ ...sessionQuestion, answeredAt: new Date().toISOString(), answer: body.answer as AnswerDTO });
-      setPhase("rating");
+      const answer = body.answer as AnswerDTO;
+      setSessionQuestion({ ...sessionQuestion, answeredAt: new Date().toISOString(), answer });
+
+      if (answer.evaluationStatus === "COMPLETED") {
+        setPhase("rating");
+      } else {
+        setPhase("evaluating");
+        void runEvaluation(session.id, sessionQuestion.id);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not evaluate this answer.");
+      setError(err instanceof Error ? err.message : "Could not save this answer.");
       setPhase("question");
     } finally {
       setIsBusy(false);
@@ -238,6 +295,7 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
           feedback: "You revealed the answer instead of attempting retrieval.",
           correctAnswer: body.correctAnswer,
           revealedAnswer: true,
+          evaluationStatus: "COMPLETED",
         },
       });
       setPhase("rating");
@@ -456,6 +514,30 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
               </button>
             </div>
           </>
+        )}
+
+        {(phase === "eval_timeout" || phase === "eval_error") && (
+          <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+              <p className="font-medium text-amber-800 dark:text-amber-300">
+                {phase === "eval_timeout" ? "We couldn't evaluate your answer in time." : "We couldn't evaluate your answer right now."}
+              </p>
+              <p className="mt-1 text-amber-700 dark:text-amber-400">Your answer has been saved. Rating needs it to finish evaluating.</p>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setPhase("evaluating");
+                  void runEvaluation(session.id, sessionQuestion.id);
+                }}
+                disabled={isBusy}
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                Retry evaluation
+              </button>
+            </div>
+          </div>
         )}
 
         {phase === "rating" && sessionQuestion.answer && (

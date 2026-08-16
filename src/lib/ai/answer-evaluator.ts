@@ -1,6 +1,5 @@
 import { env } from "@/lib/env";
-import { extractStructured } from "@/lib/ai/claude";
-import { withRetry } from "@/lib/ai/retry";
+import { AiRequestTimeoutError, extractStructured } from "@/lib/ai/claude";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import {
   AnswerEvaluationSchema,
@@ -9,6 +8,13 @@ import {
   type MistakeSeveritySchema,
 } from "@/lib/ai/prompts/answer-evaluation";
 import type { z } from "zod";
+
+/** Raised when Claude doesn't respond within AI_ACTIVE_RECALL_EVALUATION_TIMEOUT_MS (Phase 17 §16) — distinct from AnswerEvaluationFailedError so callers can offer "Retry evaluation" with an accurate message instead of a generic failure. */
+export class AnswerEvaluationTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super("Evaluation timed out.");
+  }
+}
 
 export type MistakeCategory = z.infer<typeof MistakeCategorySchema>;
 export type MistakeSeverityLevel = z.infer<typeof MistakeSeveritySchema>;
@@ -68,6 +74,15 @@ function toOutcome(correctness: "CORRECT" | "PARTIAL" | "INCORRECT"): "SUCCESS" 
  * Calls Claude to evaluate a student's free-text answer (spec §11-15).
  * Never writes to the database and never touches mastery directly (spec
  * §21/§28) — callers pass the structured result to recordLearningOutcome.
+ *
+ * Deliberately a single, timeout-bounded attempt — no `withRetry` wrapping
+ * (Phase 17 §16/§2). This call sits directly in front of a student waiting
+ * on "Evaluating your answer..."; composing exponential-backoff retries
+ * here would just multiply how long that state can last before the UI ever
+ * gets a terminal outcome. Retrying is still supported, but as an explicit,
+ * user-triggered "Retry evaluation" action (study-session.ts's
+ * evaluateSubmittedAnswer) that re-enters this same bounded call, not an
+ * automatic loop hidden inside it.
  */
 export async function evaluateAnswer(input: AnswerEvaluationInput): Promise<AnswerEvaluationResult> {
   const { system, prompt } = buildAnswerEvaluationPrompt({
@@ -83,8 +98,9 @@ export async function evaluateAnswer(input: AnswerEvaluationInput): Promise<Answ
     studentConfidence: input.studentConfidence,
   });
 
-  const { data } = await withRetry(() =>
-    extractStructured({
+  let data: z.infer<typeof AnswerEvaluationSchema>;
+  try {
+    ({ data } = await extractStructured({
       model: env.AI_MODEL_ANSWER_EVALUATION,
       system,
       prompt,
@@ -92,8 +108,14 @@ export async function evaluateAnswer(input: AnswerEvaluationInput): Promise<Answ
       maxTokens: AI_MAX_TOKENS.EVALUATION,
       requestType: "ANSWER_EVALUATION",
       userId: input.userId,
-    }),
-  );
+      timeoutMs: env.AI_ACTIVE_RECALL_EVALUATION_TIMEOUT_MS,
+    }));
+  } catch (error) {
+    if (error instanceof AiRequestTimeoutError) {
+      throw new AnswerEvaluationTimeoutError(error.timeoutMs);
+    }
+    throw error;
+  }
 
   const prerequisiteMatch = data.prerequisiteGapConceptName
     ? input.knownPrerequisites.find((p) => p.name.toLowerCase() === data.prerequisiteGapConceptName!.toLowerCase())

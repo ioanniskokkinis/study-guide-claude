@@ -50,6 +50,15 @@ export interface ExtractOptions<T> {
   userId?: string | null;
   /** Optional session/conversation identifier for usage aggregation (Phase 12 §13) — a TutorSession/StudySession/Exam id, never a raw student message. */
   sessionId?: string | null;
+  /**
+   * Bounds how long this call may take (Phase 17 §16) — without this, a
+   * slow/hanging Claude response blocks the caller for as long as the SDK's
+   * own default timeout allows, with no application-level escape hatch.
+   * Aborts the underlying HTTP request via AbortController and throws
+   * AiRequestTimeoutError; usage is still logged (success: false) exactly
+   * like any other failed call.
+   */
+  timeoutMs?: number;
 }
 
 export interface ExtractResult<T> {
@@ -70,6 +79,13 @@ export class MidStreamGenerationError extends Error {
     public readonly cause: unknown,
   ) {
     super("Claude streaming generation failed after partial output.");
+  }
+}
+
+/** Raised by `extractStructured` when `timeoutMs` elapses before Claude responds (Phase 17 §16) — distinguishable from a genuine API/validation error so callers can offer "Retry" instead of a generic failure. */
+export class AiRequestTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(`Claude did not respond within ${timeoutMs}ms.`);
   }
 }
 
@@ -152,18 +168,24 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
   const anthropic = getClient();
   const startedAt = Date.now();
 
+  const controller = options.timeoutMs != null ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), options.timeoutMs) : null;
+
   let response: Awaited<ReturnType<typeof anthropic.messages.parse>>;
   try {
-    response = await anthropic.messages.parse({
-      model: modelId,
-      max_tokens: options.maxTokens ?? 4096,
-      system: options.system,
-      messages: [{ role: "user", content: options.prompt }],
-      output_config: {
-        format: zodOutputFormat(options.schema),
-        ...(options.model === "default" && options.effort ? { effort: options.effort } : {}),
+    response = await anthropic.messages.parse(
+      {
+        model: modelId,
+        max_tokens: options.maxTokens ?? 4096,
+        system: options.system,
+        messages: [{ role: "user", content: options.prompt }],
+        output_config: {
+          format: zodOutputFormat(options.schema),
+          ...(options.model === "default" && options.effort ? { effort: options.effort } : {}),
+        },
       },
-    });
+      controller ? { signal: controller.signal } : undefined,
+    );
   } catch (error) {
     await logAiUsage({
       userId: options.userId ?? null,
@@ -175,7 +197,12 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
       latencyMs: Date.now() - startedAt,
       success: false,
     });
+    if (controller?.signal.aborted) {
+      throw new AiRequestTimeoutError(options.timeoutMs!);
+    }
     throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   if (response.parsed_output === null) {

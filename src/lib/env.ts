@@ -27,6 +27,17 @@ const envSchema = z.object({
   AI_MODEL_ANSWER_EVALUATION: z.enum(["fast", "default"]).default("default"),
   AI_MODEL_HINT_GENERATION: z.enum(["fast", "default"]).default("fast"),
   DEFAULT_RECALL_SESSION_LENGTH: z.coerce.number().int().positive().default(10),
+  // Phase 17 (Active Recall reliability): bounds the single Claude call
+  // evaluateAnswer() makes. No AI call anywhere in the app had an explicit
+  // timeout before this — the "Evaluating..." hang was an unbounded
+  // extractStructured() call with nothing to cut it off. 20s is generous
+  // headroom over a typical structured-JSON grading call's latency while
+  // staying far short of "indefinite."
+  AI_ACTIVE_RECALL_EVALUATION_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  // How many not-yet-served questions an Active Recall session tries to keep
+  // ready ahead of the student (Phase 17 §5) — bounded on purpose (§11): a
+  // small, replenished buffer, never an unbounded generation burst.
+  ACTIVE_RECALL_PREFETCH_COUNT: z.coerce.number().int().nonnegative().default(3),
   // Phase 7 (Intelligent Tutor): evaluation needs the stronger model
   // (classifying a free-text response, including misconception detection,
   // is the hard reasoning step); generation (Socratic questions, hints,
