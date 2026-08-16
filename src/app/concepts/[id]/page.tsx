@@ -103,6 +103,7 @@ export default async function ConceptDetailPage({ params }: PageProps) {
 
       {mastery && (
         <ConceptMyKnowledge
+          courseId={concept.course.id}
           mastery={mastery}
           prerequisiteStatus={prerequisiteStatus}
           evidence={evidence ?? []}

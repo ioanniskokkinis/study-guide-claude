@@ -145,4 +145,84 @@ describe("recordLearningOutcome", () => {
 
     expect(await resolveMistake(otherUserId, mistakeId)).toBeNull();
   });
+
+  it("persists currentStreak/bestStreak across calls, resetting current but never bestStreak on a losing turn", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const user = await prisma.user.create({ data: { email: `test-streak-${suffix}@example.com` } });
+    const course = await prisma.course.create({ data: { userId: user.id, title: "Streak course" } });
+    const concept = await prisma.concept.create({
+      data: { courseId: course.id, name: "VLANs", normalizedName: "vlans" },
+    });
+
+    const first = await recordLearningOutcome({
+      userId: user.id,
+      conceptId: concept.id,
+      activityType: "RECALL",
+      score: 0.5,
+      outcome: "SUCCESS",
+      difficulty: 1,
+    });
+    const second = await recordLearningOutcome({
+      userId: user.id,
+      conceptId: concept.id,
+      activityType: "RECALL",
+      score: 1,
+      outcome: "SUCCESS",
+      difficulty: 5,
+    });
+
+    expect(first!.mastery.currentStreak).toBe(1);
+    expect(second!.mastery.currentStreak).toBe(2);
+    expect(second!.mastery.bestStreak).toBe(2);
+
+    const failure = await recordLearningOutcome({
+      userId: user.id,
+      conceptId: concept.id,
+      activityType: "RECALL",
+      score: 0,
+      outcome: "FAILURE",
+      difficulty: 3,
+    });
+    expect(failure!.mastery.currentStreak).toBe(-1);
+    expect(failure!.mastery.bestStreak).toBe(2); // never decreases
+
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  it("threads difficulty through to the mastery update: a harder-question success moves the score further than an equally-positioned easier one", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const user = await prisma.user.create({ data: { email: `test-difficulty-${suffix}@example.com` } });
+    const course = await prisma.course.create({ data: { userId: user.id, title: "Difficulty course" } });
+    const easyConcept = await prisma.concept.create({
+      data: { courseId: course.id, name: "Easy Concept", normalizedName: "easy-concept" },
+    });
+    const hardConcept = await prisma.concept.create({
+      data: { courseId: course.id, name: "Hard Concept", normalizedName: "hard-concept" },
+    });
+
+    // Establish an identical non-zero, non-one baseline on each concept (first touch takes the score outright).
+    await recordLearningOutcome({ userId: user.id, conceptId: easyConcept.id, activityType: "RECALL", score: 0.5, outcome: "SUCCESS" });
+    await recordLearningOutcome({ userId: user.id, conceptId: hardConcept.id, activityType: "RECALL", score: 0.5, outcome: "SUCCESS" });
+
+    const easyResult = await recordLearningOutcome({
+      userId: user.id,
+      conceptId: easyConcept.id,
+      activityType: "RECALL",
+      score: 1,
+      outcome: "SUCCESS",
+      difficulty: 1,
+    });
+    const hardResult = await recordLearningOutcome({
+      userId: user.id,
+      conceptId: hardConcept.id,
+      activityType: "RECALL",
+      score: 1,
+      outcome: "SUCCESS",
+      difficulty: 5,
+    });
+
+    expect(hardResult!.mastery.recallScore).toBeGreaterThan(easyResult!.mastery.recallScore);
+
+    await prisma.user.delete({ where: { id: user.id } });
+  });
 });

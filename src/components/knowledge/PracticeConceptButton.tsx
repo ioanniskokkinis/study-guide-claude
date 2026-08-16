@@ -11,7 +11,15 @@ const PRACTICE_QUESTION_COUNT = 5;
  * findReusableExam) a short WRITTEN exam scoped to just this concept via
  * the existing Exam engine. No second quiz system.
  */
-export function PracticeConceptButton({ courseId, conceptId }: { courseId: string; conceptId: string }) {
+export function PracticeConceptButton({
+  courseId,
+  conceptId,
+  label = "Practice",
+}: {
+  courseId: string;
+  conceptId: string;
+  label?: string;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +50,7 @@ export function PracticeConceptButton({ courseId, conceptId }: { courseId: strin
         disabled={loading}
         className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
       >
-        {loading ? "Starting…" : "Practice"}
+        {loading ? "Starting…" : label}
       </button>
       {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
     </div>

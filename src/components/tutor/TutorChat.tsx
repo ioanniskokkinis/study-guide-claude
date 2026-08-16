@@ -693,6 +693,31 @@ export function TutorChat({
             >
               Just tell me
             </button>
+            {/* Reuse the same free-text send() pipeline as every other quick action here — no new backend, the Tutor already handles open-ended requests like these in every mode (Phase 2 §O). */}
+            <button
+              type="button"
+              onClick={() => void send("Can you explain that differently?")}
+              disabled={sending}
+              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
+            >
+              Explain differently
+            </button>
+            <button
+              type="button"
+              onClick={() => void send("Can you give me an example?")}
+              disabled={sending}
+              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
+            >
+              Give an example
+            </button>
+            <button
+              type="button"
+              onClick={() => void send("Test me on this.")}
+              disabled={sending}
+              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
+            >
+              Test me
+            </button>
             {session.mode !== "TEACH_BACK" && (
               <button
                 type="button"

@@ -134,6 +134,7 @@ export async function recordLearningOutcome(
       confidence: input.confidence,
       usedHint: input.usedHint,
       revealedAnswer: input.revealedAnswer,
+      difficulty: input.difficulty,
     };
 
     const mastery = await updateMastery(tx, {

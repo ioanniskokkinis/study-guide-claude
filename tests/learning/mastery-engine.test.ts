@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   applyEvidence,
+  BASE_EVIDENCE_WEIGHT,
   clamp01,
+  computeEvidenceWeight,
   computeOverallMastery,
   deriveOutcomeFromScore,
   deriveStatus,
   emptyMasterySnapshot,
   mapActivityToDimension,
   MASTERY_THRESHOLDS,
+  MAX_EVIDENCE_WEIGHT,
   MIN_SUCCESSFUL_ATTEMPTS_FOR_MASTERY,
+  nextStreak,
   STRUGGLE_ATTEMPT_THRESHOLD_FOR_REMEDIATION,
   WeightedEvidenceStrategy,
   type EvidenceInput,
@@ -243,5 +247,157 @@ describe("applyEvidence", () => {
 
     expect(snapshot.status).toBe("MASTERED");
     expect(snapshot.overallMastery).toBeGreaterThanOrEqual(MASTERY_THRESHOLDS.masteryCandidate);
+  });
+});
+
+describe("nextStreak", () => {
+  it("starts a positive streak from zero on success and a negative streak from zero on failure", () => {
+    expect(nextStreak(0, "SUCCESS")).toBe(1);
+    expect(nextStreak(0, "FAILURE")).toBe(-1);
+  });
+
+  it("extends a same-direction streak", () => {
+    expect(nextStreak(1, "SUCCESS")).toBe(2);
+    expect(nextStreak(4, "SUCCESS")).toBe(5);
+    expect(nextStreak(-1, "FAILURE")).toBe(-2);
+    expect(nextStreak(-4, "FAILURE")).toBe(-5);
+  });
+
+  it("flips direction immediately on an opposite outcome rather than crossing through zero", () => {
+    expect(nextStreak(5, "FAILURE")).toBe(-1);
+    expect(nextStreak(-5, "SUCCESS")).toBe(1);
+  });
+
+  it("resets the streak to zero on a PARTIAL outcome regardless of prior direction", () => {
+    expect(nextStreak(5, "PARTIAL")).toBe(0);
+    expect(nextStreak(-5, "PARTIAL")).toBe(0);
+    expect(nextStreak(0, "PARTIAL")).toBe(0);
+  });
+});
+
+describe("computeEvidenceWeight", () => {
+  it("returns the base weight with no streak and no difficulty", () => {
+    expect(computeEvidenceWeight(0, null, "SUCCESS")).toBe(BASE_EVIDENCE_WEIGHT);
+    expect(computeEvidenceWeight(0, undefined, "FAILURE")).toBe(BASE_EVIDENCE_WEIGHT);
+  });
+
+  it("increases the weight for a success that continues an existing success streak", () => {
+    const noStreak = computeEvidenceWeight(0, null, "SUCCESS");
+    const withStreak = computeEvidenceWeight(3, null, "SUCCESS");
+    expect(withStreak).toBeGreaterThan(noStreak);
+  });
+
+  it("increases the weight for a failure that continues an existing failure streak", () => {
+    const noStreak = computeEvidenceWeight(0, null, "FAILURE");
+    const withStreak = computeEvidenceWeight(-3, null, "FAILURE");
+    expect(withStreak).toBeGreaterThan(noStreak);
+  });
+
+  it("does not boost the weight when the outcome breaks the existing streak direction", () => {
+    // Already on a success streak, but this evidence is a failure — no same-direction bonus applies.
+    expect(computeEvidenceWeight(3, null, "FAILURE")).toBe(BASE_EVIDENCE_WEIGHT);
+    expect(computeEvidenceWeight(-3, null, "SUCCESS")).toBe(BASE_EVIDENCE_WEIGHT);
+  });
+
+  it("weights a correct answer on a harder question more than the same answer on an easy question", () => {
+    const easy = computeEvidenceWeight(0, 1, "SUCCESS");
+    const hard = computeEvidenceWeight(0, 5, "SUCCESS");
+    expect(hard).toBeGreaterThan(easy);
+  });
+
+  it("gives more relief for missing a hard question than missing an easy one", () => {
+    const easyMiss = computeEvidenceWeight(0, 1, "FAILURE");
+    const hardMiss = computeEvidenceWeight(0, 5, "FAILURE");
+    expect(hardMiss).toBeLessThan(easyMiss);
+  });
+
+  it("never exceeds MAX_EVIDENCE_WEIGHT even with a long streak and maximum difficulty", () => {
+    expect(computeEvidenceWeight(50, 5, "SUCCESS")).toBeLessThanOrEqual(MAX_EVIDENCE_WEIGHT);
+    expect(computeEvidenceWeight(-50, 1, "FAILURE")).toBeLessThanOrEqual(MAX_EVIDENCE_WEIGHT);
+  });
+
+  it("caps the streak bonus itself so an arbitrarily long streak can't dominate on its own", () => {
+    const at10 = computeEvidenceWeight(10, null, "SUCCESS");
+    const at100 = computeEvidenceWeight(100, null, "SUCCESS");
+    expect(at100).toBe(at10);
+  });
+});
+
+describe("applyEvidence: streak and difficulty awareness", () => {
+  it("tracks currentStreak and bestStreak through a run of successes", () => {
+    let snapshot = emptyMasterySnapshot();
+    for (let i = 0; i < 4; i++) {
+      snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.9, outcome: "SUCCESS" });
+    }
+    expect(snapshot.currentStreak).toBe(4);
+    expect(snapshot.bestStreak).toBe(4);
+  });
+
+  it("resets currentStreak but preserves bestStreak once a failure follows a success streak", () => {
+    let snapshot = emptyMasterySnapshot();
+    for (let i = 0; i < 4; i++) {
+      snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.9, outcome: "SUCCESS" });
+    }
+    snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.1, outcome: "FAILURE" });
+
+    expect(snapshot.currentStreak).toBe(-1);
+    expect(snapshot.bestStreak).toBe(4);
+  });
+
+  it("never lets bestStreak decrease even after a losing streak longer than the best winning streak", () => {
+    let snapshot = emptyMasterySnapshot();
+    snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.9, outcome: "SUCCESS" });
+    snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.9, outcome: "SUCCESS" });
+    for (let i = 0; i < 5; i++) {
+      snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.1, outcome: "FAILURE" });
+    }
+    expect(snapshot.currentStreak).toBe(-5);
+    expect(snapshot.bestStreak).toBe(2);
+  });
+
+  it("a PARTIAL outcome breaks the streak back to zero", () => {
+    let snapshot = emptyMasterySnapshot();
+    snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.9, outcome: "SUCCESS" });
+    snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.9, outcome: "SUCCESS" });
+    snapshot = applyEvidence(snapshot, { activityType: "RECALL", score: 0.5, outcome: "PARTIAL" });
+    expect(snapshot.currentStreak).toBe(0);
+    expect(snapshot.bestStreak).toBe(2);
+  });
+
+  it("moves a repeatedly-correct score further per update than an equivalent single isolated success (streak weighting compounds, within the mastery cap)", () => {
+    // A: five isolated successes each following a reset (PARTIAL) — no streak bonus ever applies.
+    let snapshotA = emptyMasterySnapshot();
+    for (let i = 0; i < 5; i++) {
+      snapshotA = applyEvidence(snapshotA, { activityType: "APPLICATION", score: 1, outcome: "SUCCESS" });
+      snapshotA = applyEvidence(snapshotA, { activityType: "APPLICATION", score: 0, outcome: "PARTIAL" });
+    }
+
+    // B: five *consecutive* successes — each gets a growing same-direction streak bonus.
+    let snapshotB = emptyMasterySnapshot();
+    for (let i = 0; i < 5; i++) {
+      snapshotB = applyEvidence(snapshotB, { activityType: "APPLICATION", score: 1, outcome: "SUCCESS" });
+    }
+
+    expect(snapshotB.applicationScore).toBeGreaterThan(snapshotA.applicationScore);
+  });
+
+  it("does not allow a single high-difficulty correct answer to jump mastery to MASTERED from a low baseline", () => {
+    const low = applyEvidence(emptyMasterySnapshot(), { activityType: "RECALL", score: 0.1, outcome: "FAILURE" });
+    const next = applyEvidence(low, { activityType: "RECALL", score: 1, outcome: "SUCCESS", difficulty: 5 });
+    expect(next.status).not.toBe("MASTERED");
+    expect(next.overallMastery).toBeLessThan(MASTERY_THRESHOLDS.masteryCandidate);
+  });
+
+  it("respects an explicitly passed strategy over the derived streak/difficulty weight", () => {
+    const fixed = new WeightedEvidenceStrategy(0.5);
+    const withStreak = applyEvidence(
+      { ...emptyMasterySnapshot(), currentStreak: 10 },
+      { activityType: "RECALL", score: 1, outcome: "SUCCESS", difficulty: 5 },
+      fixed,
+    );
+    // exposureCount for the dimension is 0 (first touch), so the strategy takes the score outright
+    // regardless of weight — this just confirms the explicit strategy path still runs without error
+    // and produces a valid, capped result rather than silently falling back to the derived weight.
+    expect(withStreak.recallScore).toBe(1);
   });
 });

@@ -351,6 +351,11 @@ model StudentConceptMastery {
   hintCount     Int @default(0)
   revealCount   Int @default(0)
 
+  /// Signed (Phase 2 §A/§B): positive = consecutive correct, negative = consecutive incorrect, 0 = none/broken by a PARTIAL outcome.
+  currentStreak Int @default(0)
+  /// Best (highest) consecutive-correct streak ever reached for this concept — never decreases.
+  bestStreak    Int @default(0)
+
   status        MasteryStatus @default(UNKNOWN)
   lastAttemptAt DateTime?
   lastSuccessAt DateTime?

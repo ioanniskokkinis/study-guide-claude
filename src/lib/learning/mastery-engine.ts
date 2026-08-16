@@ -130,6 +130,56 @@ export class WeightedEvidenceStrategy implements MasteryStrategy {
   }
 }
 
+/** The base recency weight every single piece of evidence gets before any streak/difficulty adjustment (Phase 2 §B). */
+export const BASE_EVIDENCE_WEIGHT = 0.35;
+/** Hard ceiling on the adjusted weight — however strong the streak/difficulty signal, one answer can never swing mastery unrealistically (Phase 2 §B). */
+export const MAX_EVIDENCE_WEIGHT = 0.6;
+/** Per consecutive same-direction outcome, capped so a long streak still can't dominate a single update. */
+const STREAK_WEIGHT_STEP = 0.03;
+const STREAK_WEIGHT_CAP = 0.15;
+/** How much a question's difficulty (1-5) can shift the weight: a correct answer on a hard question counts more; a wrong answer on a hard question is less damning than the same miss on an easy one. */
+const DIFFICULTY_CORRECT_BONUS = 0.1;
+const DIFFICULTY_INCORRECT_RELIEF = 0.05;
+
+/**
+ * Streak/difficulty-aware evidence weight (Phase 2 §B: "repeated incorrect
+ * answers: stronger signal," "repeated correct answers: gradual increase,"
+ * "do not allow one answer to cause an unrealistic mastery jump"). Purely a
+ * function of state already on hand — no DB access, deterministic.
+ * `streakBeforeThisEvidence` is signed: positive = consecutive successes,
+ * negative = consecutive failures, 0 = no streak (or the last outcome was
+ * PARTIAL, which breaks a streak in either direction).
+ */
+export function computeEvidenceWeight(
+  streakBeforeThisEvidence: number,
+  difficulty: number | null | undefined,
+  outcome: EvidenceOutcome,
+  baseWeight: number = BASE_EVIDENCE_WEIGHT,
+): number {
+  let weight = baseWeight;
+
+  const sameDirection =
+    (outcome === "SUCCESS" && streakBeforeThisEvidence > 0) || (outcome === "FAILURE" && streakBeforeThisEvidence < 0);
+  if (sameDirection) {
+    weight += Math.min(Math.abs(streakBeforeThisEvidence) * STREAK_WEIGHT_STEP, STREAK_WEIGHT_CAP);
+  }
+
+  if (difficulty != null) {
+    const normalizedDifficulty = clamp01((difficulty - 1) / 4); // 1..5 -> 0..1
+    if (outcome === "SUCCESS") weight += normalizedDifficulty * DIFFICULTY_CORRECT_BONUS;
+    else if (outcome === "FAILURE") weight += (1 - normalizedDifficulty) * DIFFICULTY_INCORRECT_RELIEF;
+  }
+
+  return Math.min(weight, MAX_EVIDENCE_WEIGHT);
+}
+
+/** Next signed streak value after one piece of evidence — PARTIAL always resets to 0 (spec: neither a clean win nor a clean loss). */
+export function nextStreak(currentStreak: number, outcome: EvidenceOutcome): number {
+  if (outcome === "SUCCESS") return currentStreak >= 0 ? currentStreak + 1 : 1;
+  if (outcome === "FAILURE") return currentStreak <= 0 ? currentStreak - 1 : -1;
+  return 0;
+}
+
 export interface MasterySnapshot extends DimensionScores {
   confidenceScore: number;
   overallMastery: number;
@@ -140,6 +190,10 @@ export interface MasterySnapshot extends DimensionScores {
   hintCount: number;
   revealCount: number;
   status: MasteryStatus;
+  /** Signed: positive = consecutive correct, negative = consecutive incorrect, 0 = none/broken by a PARTIAL. */
+  currentStreak: number;
+  /** Best (highest) consecutive-correct streak ever reached — never decreases. */
+  bestStreak: number;
 }
 
 export function emptyMasterySnapshot(): MasterySnapshot {
@@ -157,6 +211,8 @@ export function emptyMasterySnapshot(): MasterySnapshot {
     hintCount: 0,
     revealCount: 0,
     status: "UNKNOWN",
+    currentStreak: 0,
+    bestStreak: 0,
   };
 }
 
@@ -169,20 +225,23 @@ export interface EvidenceInput {
   confidence?: number | null;
   usedHint?: boolean;
   revealedAnswer?: boolean;
+  /** 1-5, same scale as Concept/Question/ExamQuestion/ReviewItem difficulty — modulates the evidence weight (Phase 2 §B). */
+  difficulty?: number | null;
 }
 
 /**
  * Pure state-transition function: current mastery + one new piece of
  * evidence -> next mastery. No DB access, no side effects — this is what
- * every unit test in the mastery test suite exercises directly.
+ * every unit test in the mastery test suite exercises directly. When no
+ * explicit `strategy` is given, the evidence weight is derived from the
+ * student's current streak and this evidence's difficulty (still bounded —
+ * see MAX_EVIDENCE_WEIGHT) rather than a single fixed constant.
  */
-export function applyEvidence(
-  current: MasterySnapshot,
-  evidence: EvidenceInput,
-  strategy: MasteryStrategy = new WeightedEvidenceStrategy(),
-): MasterySnapshot {
+export function applyEvidence(current: MasterySnapshot, evidence: EvidenceInput, strategy?: MasteryStrategy): MasterySnapshot {
   const dimension = mapActivityToDimension(evidence.activityType);
   const dimensionKey = `${dimension}Score` as const;
+  const effectiveStrategy =
+    strategy ?? new WeightedEvidenceStrategy(computeEvidenceWeight(current.currentStreak, evidence.difficulty, evidence.outcome));
 
   // exposureCount is a single counter shared across all four dimensions, but
   // each dimension's own history should only "count" once evidence has
@@ -195,12 +254,12 @@ export function applyEvidence(
   const dimensionExposure = current[dimensionKey] === 0 ? 0 : current.exposureCount;
   const next: MasterySnapshot = {
     ...current,
-    [dimensionKey]: strategy.nextScore(current[dimensionKey], dimensionExposure, clamp01(evidence.score)),
+    [dimensionKey]: effectiveStrategy.nextScore(current[dimensionKey], dimensionExposure, clamp01(evidence.score)),
   };
 
   if (evidence.confidence != null) {
     const confidenceExposure = current.confidenceScore === 0 ? 0 : current.exposureCount;
-    next.confidenceScore = strategy.nextScore(current.confidenceScore, confidenceExposure, clamp01(evidence.confidence));
+    next.confidenceScore = effectiveStrategy.nextScore(current.confidenceScore, confidenceExposure, clamp01(evidence.confidence));
   }
 
   next.exposureCount = current.exposureCount + 1;
@@ -209,6 +268,9 @@ export function applyEvidence(
   if (evidence.outcome === "FAILURE") next.failureCount = current.failureCount + 1;
   if (evidence.usedHint) next.hintCount = current.hintCount + 1;
   if (evidence.revealedAnswer) next.revealCount = current.revealCount + 1;
+
+  next.currentStreak = nextStreak(current.currentStreak, evidence.outcome);
+  next.bestStreak = Math.max(current.bestStreak, next.currentStreak);
 
   next.overallMastery = computeOverallMastery(next);
   next.status = deriveStatus(next.overallMastery, next.attemptCount, next.successCount, next.exposureCount);

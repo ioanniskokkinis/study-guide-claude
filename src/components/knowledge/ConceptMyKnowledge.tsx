@@ -2,6 +2,7 @@ import type { ConceptMasterySummary, EvidenceSummary, MistakeSummary, Prerequisi
 import type { ReviewItemDetail } from "@/lib/review/review-queries";
 import { formatRelativeDays } from "@/lib/format";
 import { MistakeResolveButton } from "./MistakeResolveButton";
+import { PracticeConceptButton } from "./PracticeConceptButton";
 import { formatMasteryPercent, masteryStatusLabel } from "./mastery-status-label";
 
 function DimensionBar({ label, score }: { label: string; score: number }) {
@@ -22,12 +23,14 @@ function DimensionBar({ label, score }: { label: string; score: number }) {
 }
 
 export function ConceptMyKnowledge({
+  courseId,
   mastery,
   prerequisiteStatus,
   evidence,
   mistakes,
   reviewDetail,
 }: {
+  courseId: string;
   mastery: ConceptMasterySummary;
   prerequisiteStatus: PrerequisiteStatusNode | null;
   evidence: EvidenceSummary[];
@@ -137,12 +140,16 @@ export function ConceptMyKnowledge({
                 {weakerPrerequisite.concept.name} — {formatMasteryPercent(weakerPrerequisite.mastery.overallMastery)} mastery, lower than this
                 concept&rsquo;s.
               </p>
-              <a
-                href={`/concepts/${weakerPrerequisite.concept.id}`}
-                className="mt-2 inline-block rounded-md border border-amber-400 px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40"
-              >
-                Review prerequisite
-              </a>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <a
+                  href={`/concepts/${weakerPrerequisite.concept.id}`}
+                  className="inline-block rounded-md border border-amber-400 px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                >
+                  Review prerequisite
+                </a>
+                {/* Never hard-blocking (Phase 2 §F): practicing this concept directly is always available too. */}
+                <PracticeConceptButton courseId={courseId} conceptId={mastery.conceptId} label="Practice anyway" />
+              </div>
             </div>
           )}
         </div>

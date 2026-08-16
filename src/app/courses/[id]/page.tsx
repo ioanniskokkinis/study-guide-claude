@@ -4,6 +4,9 @@ import { getCurrentUser } from "@/lib/auth/dev-user";
 import { getCourseWithDocuments } from "@/lib/services/courses";
 import { listFolders } from "@/lib/services/folders";
 import { getCourseMastery } from "@/lib/services/student-knowledge";
+import { getReviewState } from "@/lib/review/review-queries";
+import { rankWeakConcepts } from "@/lib/learning/weak-concepts";
+import { getNextLearningAction, NoConceptsAvailableError } from "@/lib/learning/adaptive-engine";
 import { DeleteCourseButton } from "@/components/courses/DeleteCourseButton";
 import { KnowledgeHub } from "@/components/documents/KnowledgeHub";
 import { MyKnowledgeSummaryCard } from "@/components/knowledge/MyKnowledgeSummaryCard";
@@ -17,15 +20,24 @@ interface PageProps {
 export default async function CoursePage({ params }: PageProps) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const [course, mastery, folders] = await Promise.all([
+  const [course, mastery, folders, reviewState, weakConcepts] = await Promise.all([
     getCourseWithDocuments(user.id, id),
     getCourseMastery(user.id, id),
     listFolders(user.id, id),
+    getReviewState(user.id, id),
+    rankWeakConcepts(user.id, id),
   ]);
 
   if (!course) {
     notFound();
   }
+
+  const recommendedAction = await getNextLearningAction({ userId: user.id, courseId: id })
+    .then((r) => r.action)
+    .catch((error) => {
+      if (!(error instanceof NoConceptsAvailableError)) console.error("Failed to compute recommended next action:", error);
+      return null;
+    });
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
@@ -83,7 +95,13 @@ export default async function CoursePage({ params }: PageProps) {
 
       {mastery && (
         <div className="mt-8">
-          <MyKnowledgeSummaryCard courseId={course.id} mastery={mastery} />
+          <MyKnowledgeSummaryCard
+            courseId={course.id}
+            mastery={mastery}
+            dueCount={reviewState?.dueCount}
+            weakConcepts={weakConcepts ?? undefined}
+            recommendedAction={recommendedAction}
+          />
         </div>
       )}
 
