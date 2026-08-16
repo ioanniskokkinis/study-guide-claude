@@ -1279,19 +1279,30 @@ model ExamResult {
 // Cost control / observability
 // ---------------------------------------------------------------------------
 
+/// Phase 12: usage/cost observability, not billing. `sessionId` is a plain
+/// string (not a relation) since it can point at a TutorSession, StudySession,
+/// or Exam depending on `requestType` — a single FK would couple this
+/// cross-cutting log table to one domain model. `success=false` rows have
+/// best-effort token counts (usually 0, since a failed call often produced
+/// no usable `usage` payload) — `latencyMs` is still meaningful for those.
 model AiUsageLog {
   id               String   @id @default(cuid())
   userId           String?
+  sessionId        String?
   model            String
   inputTokens      Int
   outputTokens     Int
   estimatedCostUsd Float
   requestType      String
+  latencyMs        Int?
+  success          Boolean  @default(true)
   createdAt        DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([createdAt])
+  @@index([sessionId])
+  @@index([requestType])
   @@map("ai_usage_logs")
 }

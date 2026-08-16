@@ -3,6 +3,7 @@ import type { LearningActivityType, Prisma, TutorMessage, TutorSession } from "@
 import { getMastery, bucketForStatus } from "@/lib/services/student-knowledge";
 import { recordLearningOutcome, type MistakeInput } from "@/lib/learning/record-outcome";
 import { MidStreamGenerationError, resolveModelId } from "@/lib/ai/claude";
+import { cacheGet, cacheSet } from "@/lib/ai/cache";
 import { env } from "@/lib/env";
 import { getTutorContext } from "./tutor-state";
 import { applyHintDiscount } from "./hints";
@@ -66,6 +67,23 @@ export class ConceptNotFoundError extends Error {
 
 const MAX_MESSAGE_LENGTH = 4000;
 
+/**
+ * Duplicate-submission protection window (Phase 12 §11-12) — a double-click,
+ * a browser retry, or a streaming reconnect firing the exact same
+ * (session, content) turn again within this window replays the first
+ * attempt's already-computed events instead of re-running the decision
+ * pipeline and paying for a second Claude call. Deliberately short: this
+ * guards accidental instant repeats, not a legitimate second identical
+ * message sent later in the conversation. Only successful turns are
+ * cached — a genuine failure is never replayed, so "Retry" after an error
+ * always re-runs for real.
+ */
+const DUPLICATE_TURN_WINDOW_MS = 8000;
+
+function duplicateTurnCacheKey(params: { userId: string; sessionId: string; content: string }): string {
+  return `tutor-turn:${params.userId}:${params.sessionId}:${params.content.trim()}`;
+}
+
 export interface TutorTurnResult {
   session: TutorSession;
   message: TutorMessage;
@@ -92,6 +110,7 @@ function toConceptFacts(ctx: TutorContext): ConceptFacts {
     masteryBucket: ctx.masteryBucket,
     recentMistakeDescriptions: ctx.recentMistakeDescriptions,
     conversationHistory: ctx.conversationHistory.map((t) => ({ role: t.role, content: t.content })),
+    conversationSummary: ctx.conversationSummary,
   };
 }
 
@@ -139,8 +158,9 @@ async function generateContent(params: {
   ctx: TutorContext;
   bookkeepingAfter: SessionBookkeeping;
   userId: string;
+  sessionId: string;
 }): Promise<{ content: string; metadata: Record<string, unknown>; aiCallMade: boolean }> {
-  const { decision, ctx, bookkeepingAfter, userId } = params;
+  const { decision, ctx, bookkeepingAfter, userId, sessionId } = params;
   const facts = toConceptFacts(ctx);
 
   switch (decision.action) {
@@ -158,12 +178,18 @@ async function generateContent(params: {
             : decision.action === "ASK_FOLLOWUP"
               ? "followup"
               : "new_question";
-      const content = await generateSocraticMessage({ ...facts, intent, difficulty: decision.difficulty, userId });
+      const content = await generateSocraticMessage({ ...facts, intent, difficulty: decision.difficulty, userId, sessionId });
       return { content, metadata: {}, aiCallMade: true };
     }
     case "GIVE_HINT": {
       const level = Math.min(3, Math.max(1, bookkeepingAfter.hintLevel)) as 1 | 2 | 3;
-      const content = await generateHint({ ...facts, level, tutorPrompt: lastTutorMessageContent(facts.conversationHistory), userId });
+      const content = await generateHint({
+        ...facts,
+        level,
+        tutorPrompt: lastTutorMessageContent(facts.conversationHistory),
+        userId,
+        sessionId,
+      });
       return { content, metadata: { hintLevel: level }, aiCallMade: true };
     }
     case "GIVE_EXPLANATION": {
@@ -173,7 +199,7 @@ async function generateContent(params: {
           ? decision.metadata.explanationStrategy
           : pickExplanationStrategy(bookkeepingAfter.lastExplanationStrategy);
       const sourceChunks = await resolveSourceCitations(decision.conceptId);
-      const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId });
+      const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId, sessionId });
       return { content: formatExplanation(explanation, sourceChunks), metadata: { strategy, revealed }, aiCallMade: true };
     }
     case "CHECK_PREREQUISITE": {
@@ -181,13 +207,13 @@ async function generateContent(params: {
         decision.conceptId === ctx.conceptId ? facts : await loadConceptFacts(decision.conceptId, userId, facts.conversationHistory);
       const strategy = pickExplanationStrategy(bookkeepingAfter.lastExplanationStrategy);
       const sourceChunks = await resolveSourceCitations(decision.conceptId);
-      const explanation = await generateExplanation({ ...targetFacts, strategy, sourceChunks, userId });
+      const explanation = await generateExplanation({ ...targetFacts, strategy, sourceChunks, userId, sessionId });
       return { content: formatExplanation(explanation, sourceChunks), metadata: { strategy, redirectedTo: decision.conceptId }, aiCallMade: true };
     }
     case "REMEDIATE": {
       const strategy = pickExplanationStrategy(bookkeepingAfter.lastExplanationStrategy);
       const sourceChunks = await resolveSourceCitations(decision.conceptId);
-      const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId });
+      const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId, sessionId });
       return { content: formatExplanation(explanation, sourceChunks), metadata: { strategy }, aiCallMade: true };
     }
     case "TEACH_BACK":
@@ -228,9 +254,10 @@ async function* generateContentDeltas(params: {
   ctx: TutorContext;
   bookkeepingAfter: SessionBookkeeping;
   userId: string;
+  sessionId: string;
   signal?: AbortSignal;
 }): AsyncGenerator<string, { content: string; metadata: Record<string, unknown>; aiCallMade: boolean }, void> {
-  const { decision, ctx, bookkeepingAfter, userId, signal } = params;
+  const { decision, ctx, bookkeepingAfter, userId, sessionId, signal } = params;
   const facts = toConceptFacts(ctx);
 
   switch (decision.action) {
@@ -248,7 +275,14 @@ async function* generateContentDeltas(params: {
             : decision.action === "ASK_FOLLOWUP"
               ? "followup"
               : "new_question";
-      const content = yield* generateSocraticMessageStream({ ...facts, intent, difficulty: decision.difficulty, userId, signal });
+      const content = yield* generateSocraticMessageStream({
+        ...facts,
+        intent,
+        difficulty: decision.difficulty,
+        userId,
+        sessionId,
+        signal,
+      });
       return { content, metadata: {}, aiCallMade: true };
     }
     case "GIVE_HINT": {
@@ -258,6 +292,7 @@ async function* generateContentDeltas(params: {
         level,
         tutorPrompt: lastTutorMessageContent(facts.conversationHistory),
         userId,
+        sessionId,
         signal,
       });
       return { content, metadata: { hintLevel: level }, aiCallMade: true };
@@ -269,7 +304,7 @@ async function* generateContentDeltas(params: {
           ? decision.metadata.explanationStrategy
           : pickExplanationStrategy(bookkeepingAfter.lastExplanationStrategy);
       const sourceChunks = await resolveSourceCitations(decision.conceptId);
-      let content = yield* generateExplanationStream({ ...facts, strategy, sourceChunks, userId, signal });
+      let content = yield* generateExplanationStream({ ...facts, strategy, sourceChunks, userId, sessionId, signal });
       if (sourceChunks.length > 0) {
         const suffix = sourceCitationSuffix(sourceChunks);
         yield suffix;
@@ -282,7 +317,7 @@ async function* generateContentDeltas(params: {
         decision.conceptId === ctx.conceptId ? facts : await loadConceptFacts(decision.conceptId, userId, facts.conversationHistory);
       const strategy = pickExplanationStrategy(bookkeepingAfter.lastExplanationStrategy);
       const sourceChunks = await resolveSourceCitations(decision.conceptId);
-      let content = yield* generateExplanationStream({ ...targetFacts, strategy, sourceChunks, userId, signal });
+      let content = yield* generateExplanationStream({ ...targetFacts, strategy, sourceChunks, userId, sessionId, signal });
       if (sourceChunks.length > 0) {
         const suffix = sourceCitationSuffix(sourceChunks);
         yield suffix;
@@ -293,7 +328,7 @@ async function* generateContentDeltas(params: {
     case "REMEDIATE": {
       const strategy = pickExplanationStrategy(bookkeepingAfter.lastExplanationStrategy);
       const sourceChunks = await resolveSourceCitations(decision.conceptId);
-      let content = yield* generateExplanationStream({ ...facts, strategy, sourceChunks, userId, signal });
+      let content = yield* generateExplanationStream({ ...facts, strategy, sourceChunks, userId, sessionId, signal });
       if (sourceChunks.length > 0) {
         const suffix = sourceCitationSuffix(sourceChunks);
         yield suffix;
@@ -511,6 +546,7 @@ export async function startTutorSession(params: {
     ctx,
     bookkeepingAfter: result.bookkeeping,
     userId: params.userId,
+    sessionId: session.id,
   });
 
   const [updatedSession, message] = await prisma.$transaction([
@@ -624,7 +660,7 @@ async function prepareTurn(params: {
     // structural placeholder so decideNextAction sees a non-null turn; its `data` is never read for these two flags.
     turn = { kind: "response", data: stubResponseEvaluation(), selfReportedConfidence: params.confidence ?? null };
   } else if (session.mode === "TEACH_BACK") {
-    const data = await evaluateTeachBack({ ...facts, studentExplanation: content, userId: params.userId });
+    const data = await evaluateTeachBack({ ...facts, studentExplanation: content, userId: params.userId, sessionId: session.id });
     turn = { kind: "teachback", data };
   } else {
     const data = await evaluateStudentResponse({
@@ -632,6 +668,7 @@ async function prepareTurn(params: {
       tutorPrompt: lastTutorMessageContent(facts.conversationHistory),
       studentResponse: content,
       userId: params.userId,
+      sessionId: session.id,
     });
     turn = { kind: "response", data, selfReportedConfidence: params.confidence ?? null };
   }
@@ -730,6 +767,7 @@ export async function submitTutorMessage(params: {
     ctx: prepared.ctx,
     bookkeepingAfter: prepared.result.bookkeeping,
     userId: params.userId,
+    sessionId: prepared.session.id,
   });
   return finalizeTurn(prepared, generated);
 }
@@ -796,6 +834,19 @@ export async function* streamTutorMessage(params: {
   confidence?: ConfidenceLevel | null;
   signal?: AbortSignal;
 }): AsyncGenerator<TutorStreamEvent, void, void> {
+  const dedupeKey = duplicateTurnCacheKey(params);
+  const cached = cacheGet<TutorStreamEvent[]>(dedupeKey);
+  if (cached) {
+    for (const event of cached) yield event;
+    return;
+  }
+
+  const emitted: TutorStreamEvent[] = [];
+  const record = (event: TutorStreamEvent): TutorStreamEvent => {
+    emitted.push(event);
+    return event;
+  };
+
   const requestStartedAt = Date.now();
   const decisionStartedAt = requestStartedAt;
 
@@ -812,7 +863,7 @@ export async function* streamTutorMessage(params: {
 
   const { session, result } = prepared;
   const aiGenerated = AI_GENERATED_ACTIONS.has(result.decision.action);
-  yield { type: "start", sessionId: session.id, action: result.decision.action, aiGenerated };
+  yield record({ type: "start", sessionId: session.id, action: result.decision.action, aiGenerated });
 
   const generationStartedAt = Date.now();
   let firstTokenAt: number | null = null;
@@ -824,12 +875,13 @@ export async function* streamTutorMessage(params: {
       ctx: prepared.ctx,
       bookkeepingAfter: result.bookkeeping,
       userId: params.userId,
+      sessionId: session.id,
       signal: params.signal,
     });
     let next = await deltas.next();
     while (!next.done) {
       if (firstTokenAt === null) firstTokenAt = Date.now();
-      yield { type: "delta", text: next.value };
+      yield record({ type: "delta", text: next.value });
       next = await deltas.next();
     }
     generated = next.value;
@@ -865,8 +917,11 @@ export async function* streamTutorMessage(params: {
     metrics,
   });
 
-  yield { type: "metadata", latency: metrics };
-  yield { type: "complete", session: finalResult.session, message: finalResult.message };
+  yield record({ type: "metadata", latency: metrics });
+  yield record({ type: "complete", session: finalResult.session, message: finalResult.message });
+
+  // Cache only after a fully successful turn — an error is never replayed (see DUPLICATE_TURN_WINDOW_MS's doc comment).
+  cacheSet(dedupeKey, emitted, DUPLICATE_TURN_WINDOW_MS);
 }
 
 function toSnapshotBookkeeping(session: TutorSession): SessionBookkeeping {
@@ -931,14 +986,14 @@ export async function requestTutorHint(sessionId: string, userId: string): Promi
   if (isReveal) {
     const strategy = pickExplanationStrategy(session.lastExplanationStrategy);
     const sourceChunks = await resolveSourceCitations(session.conceptId);
-    const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId });
+    const explanation = await generateExplanation({ ...facts, strategy, sourceChunks, userId, sessionId: session.id });
     content = formatExplanation(explanation, sourceChunks);
     lastExplanationStrategy = strategy;
     messageMetadata.strategy = strategy;
     messageMetadata.revealed = true;
   } else {
     const level = nextLevel as 1 | 2 | 3;
-    content = await generateHint({ ...facts, level, tutorPrompt, userId });
+    content = await generateHint({ ...facts, level, tutorPrompt, userId, sessionId: session.id });
     messageMetadata.hintLevel = level;
   }
 

@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
+import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import {
   AnswerEvaluationSchema,
   buildAnswerEvaluationPrompt,
@@ -88,6 +89,7 @@ export async function evaluateAnswer(input: AnswerEvaluationInput): Promise<Answ
       system,
       prompt,
       schema: AnswerEvaluationSchema,
+      maxTokens: AI_MAX_TOKENS.EVALUATION,
       requestType: "ANSWER_EVALUATION",
       userId: input.userId,
     }),

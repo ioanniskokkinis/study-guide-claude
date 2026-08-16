@@ -18,6 +18,7 @@ export function buildContext(overrides: Partial<TutorContext> = {}): TutorContex
     learningGoalDaysUntilExam: null,
     currentDifficulty: 2,
     conversationHistory: [],
+    conversationSummary: null,
     currentActivity: "SOCRATIC",
     latestStudentResponse: null,
     ...overrides,

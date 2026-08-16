@@ -4,6 +4,7 @@ import type { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
 import type { z } from "zod";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/db/prisma";
+import { calculateAiCost } from "@/lib/ai/pricing";
 
 let cachedClient: Anthropic | null = null;
 
@@ -36,13 +37,6 @@ export function resolveModelId(tier: ExtractionModel): string {
   return MODEL_IDS[tier];
 }
 
-// Approximate list pricing per million tokens, used only for AiUsageLog
-// cost estimates — not billing-accurate. Update if the configured models change.
-const COST_PER_MILLION_TOKENS: Record<string, { input: number; output: number }> = {
-  [env.ANTHROPIC_MODEL_FAST]: { input: 1.0, output: 5.0 },
-  [env.ANTHROPIC_MODEL_DEFAULT]: { input: 3.0, output: 15.0 },
-};
-
 export interface ExtractOptions<T> {
   model: ExtractionModel;
   system: string;
@@ -54,6 +48,8 @@ export interface ExtractOptions<T> {
   /** Tracked separately in AiUsageLog so extraction steps show up as distinct request types (spec §25). */
   requestType: string;
   userId?: string | null;
+  /** Optional session/conversation identifier for usage aggregation (Phase 12 §13) — a TutorSession/StudySession/Exam id, never a raw student message. */
+  sessionId?: string | null;
 }
 
 export interface ExtractResult<T> {
@@ -85,6 +81,8 @@ export interface StreamTextOptions {
   requestType: string;
   userId?: string | null;
   signal?: AbortSignal;
+  /** Optional session/conversation identifier for usage aggregation (Phase 12 §13). */
+  sessionId?: string | null;
 }
 
 /**
@@ -93,12 +91,14 @@ export interface StreamTextOptions {
  * streaming emits partial-JSON deltas, not the readable incremental text the
  * Tutor UI needs, so this is a genuinely separate (unstructured) call shape,
  * used only by the Tutor's language-generation functions. Usage is logged to
- * AiUsageLog exactly once, when the stream completes successfully, mirroring
- * `extractStructured`'s automatic logging.
+ * AiUsageLog exactly once — on success when the stream completes, on failure
+ * when the SDK emits an "error" event (Phase 12 §2: every request is
+ * measurable, including failures, not just successes).
  */
 export function streamText(options: StreamTextOptions): MessageStream {
   const modelId = MODEL_IDS[options.model];
   const anthropic = getClient();
+  const startedAt = Date.now();
 
   const stream = anthropic.messages.stream(
     {
@@ -113,10 +113,26 @@ export function streamText(options: StreamTextOptions): MessageStream {
   stream.once("finalMessage", (message) => {
     void logAiUsage({
       userId: options.userId ?? null,
+      sessionId: options.sessionId ?? null,
       model: modelId,
       inputTokens: message.usage.input_tokens ?? 0,
       outputTokens: message.usage.output_tokens,
       requestType: options.requestType,
+      latencyMs: Date.now() - startedAt,
+      success: true,
+    });
+  });
+
+  stream.once("error", () => {
+    void logAiUsage({
+      userId: options.userId ?? null,
+      sessionId: options.sessionId ?? null,
+      model: modelId,
+      inputTokens: 0,
+      outputTokens: 0,
+      requestType: options.requestType,
+      latencyMs: Date.now() - startedAt,
+      success: false,
     });
   });
 
@@ -126,24 +142,53 @@ export function streamText(options: StreamTextOptions): MessageStream {
 /**
  * Calls Claude for a single structured-JSON extraction step, validated
  * against `schema` server-side (never trust raw model output — spec §8/§9).
- * Every call is logged to AiUsageLog for cost tracking.
+ * Every call is logged to AiUsageLog for cost tracking, including failures
+ * (Phase 12 §2) — a failed call still consumed a request and (usually) some
+ * input tokens, and callers need that visible even though most callers also
+ * wrap this in their own fallback/retry logic.
  */
 export async function extractStructured<T>(options: ExtractOptions<T>): Promise<ExtractResult<T>> {
   const modelId = MODEL_IDS[options.model];
   const anthropic = getClient();
+  const startedAt = Date.now();
 
-  const response = await anthropic.messages.parse({
-    model: modelId,
-    max_tokens: options.maxTokens ?? 4096,
-    system: options.system,
-    messages: [{ role: "user", content: options.prompt }],
-    output_config: {
-      format: zodOutputFormat(options.schema),
-      ...(options.model === "default" && options.effort ? { effort: options.effort } : {}),
-    },
-  });
+  let response: Awaited<ReturnType<typeof anthropic.messages.parse>>;
+  try {
+    response = await anthropic.messages.parse({
+      model: modelId,
+      max_tokens: options.maxTokens ?? 4096,
+      system: options.system,
+      messages: [{ role: "user", content: options.prompt }],
+      output_config: {
+        format: zodOutputFormat(options.schema),
+        ...(options.model === "default" && options.effort ? { effort: options.effort } : {}),
+      },
+    });
+  } catch (error) {
+    await logAiUsage({
+      userId: options.userId ?? null,
+      sessionId: options.sessionId ?? null,
+      model: modelId,
+      inputTokens: 0,
+      outputTokens: 0,
+      requestType: options.requestType,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+    });
+    throw error;
+  }
 
   if (response.parsed_output === null) {
+    await logAiUsage({
+      userId: options.userId ?? null,
+      sessionId: options.sessionId ?? null,
+      model: modelId,
+      inputTokens: response.usage.input_tokens ?? 0,
+      outputTokens: response.usage.output_tokens,
+      requestType: options.requestType,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+    });
     throw new Error("Claude returned output that did not match the expected schema.");
   }
 
@@ -154,10 +199,13 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
 
   await logAiUsage({
     userId: options.userId ?? null,
+    sessionId: options.sessionId ?? null,
     model: modelId,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     requestType: options.requestType,
+    latencyMs: Date.now() - startedAt,
+    success: true,
   });
 
   return { data: response.parsed_output as T, usage };
@@ -165,24 +213,31 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
 
 async function logAiUsage(params: {
   userId: string | null;
+  sessionId: string | null;
   model: string;
   inputTokens: number;
   outputTokens: number;
   requestType: string;
+  latencyMs: number;
+  success: boolean;
 }): Promise<void> {
-  const rates = COST_PER_MILLION_TOKENS[params.model];
-  const estimatedCostUsd = rates
-    ? (params.inputTokens / 1_000_000) * rates.input + (params.outputTokens / 1_000_000) * rates.output
-    : 0;
+  const { estimatedTotalCost } = calculateAiCost({
+    model: params.model,
+    inputTokens: params.inputTokens,
+    outputTokens: params.outputTokens,
+  });
 
   await prisma.aiUsageLog.create({
     data: {
       userId: params.userId,
+      sessionId: params.sessionId,
       model: params.model,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
-      estimatedCostUsd,
+      estimatedCostUsd: estimatedTotalCost,
       requestType: params.requestType,
+      latencyMs: params.latencyMs,
+      success: params.success,
     },
   });
 }

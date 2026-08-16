@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { env } from "@/lib/env";
 import { extractStructured, streamText, MidStreamGenerationError } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
+import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import {
   buildExplanationPrompt,
   buildExplanationPromptText,
@@ -64,7 +65,7 @@ function fallbackResponseEvaluation(): ResponseEvaluation {
 }
 
 export async function evaluateStudentResponse(
-  ctx: ConceptFacts & { tutorPrompt: string; studentResponse: string; userId?: string | null },
+  ctx: ConceptFacts & { tutorPrompt: string; studentResponse: string; userId?: string | null; sessionId?: string | null },
 ): Promise<ResponseEvaluation> {
   const { system, prompt, schema } = buildResponseEvaluationPrompt(ctx);
   try {
@@ -74,8 +75,10 @@ export async function evaluateStudentResponse(
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.EVALUATION,
         requestType: "TUTOR_RESPONSE_EVALUATION",
         userId: ctx.userId,
+        sessionId: ctx.sessionId,
       }),
     );
     return ResponseEvaluationSchema.parse(data);
@@ -91,7 +94,12 @@ function fallbackSocraticMessage(conceptName: string, intent: string): string {
 }
 
 export async function generateSocraticMessage(
-  ctx: ConceptFacts & { intent: "new_question" | "followup" | "deepen" | "simplify"; difficulty: number; userId?: string | null },
+  ctx: ConceptFacts & {
+    intent: "new_question" | "followup" | "deepen" | "simplify";
+    difficulty: number;
+    userId?: string | null;
+    sessionId?: string | null;
+  },
 ): Promise<string> {
   const { system, prompt, schema } = buildSocraticMessagePrompt(ctx);
   try {
@@ -101,8 +109,10 @@ export async function generateSocraticMessage(
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.TUTOR,
         requestType: "TUTOR_SOCRATIC_MESSAGE",
         userId: ctx.userId,
+        sessionId: ctx.sessionId,
       }),
     );
     return data.message;
@@ -126,6 +136,7 @@ export async function* generateSocraticMessageStream(
     intent: "new_question" | "followup" | "deepen" | "simplify";
     difficulty: number;
     userId?: string | null;
+    sessionId?: string | null;
     signal?: AbortSignal;
   },
 ): AsyncGenerator<string, string, void> {
@@ -136,8 +147,10 @@ export async function* generateSocraticMessageStream(
       model: env.AI_MODEL_TUTOR_GENERATION,
       system,
       prompt,
+      maxTokens: AI_MAX_TOKENS.TUTOR,
       requestType: "TUTOR_SOCRATIC_MESSAGE",
       userId: ctx.userId,
+      sessionId: ctx.sessionId,
       signal: ctx.signal,
     });
     for await (const event of stream) {
@@ -163,7 +176,7 @@ function fallbackHint(conceptName: string, level: 1 | 2 | 3): string {
 }
 
 export async function generateHint(
-  ctx: ConceptFacts & { level: 1 | 2 | 3; tutorPrompt: string; userId?: string | null },
+  ctx: ConceptFacts & { level: 1 | 2 | 3; tutorPrompt: string; userId?: string | null; sessionId?: string | null },
 ): Promise<string> {
   const { system, prompt, schema } = buildHintPrompt(ctx);
   try {
@@ -173,8 +186,10 @@ export async function generateHint(
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.HINT,
         requestType: "TUTOR_HINT",
         userId: ctx.userId,
+        sessionId: ctx.sessionId,
       }),
     );
     return data.message;
@@ -185,7 +200,13 @@ export async function generateHint(
 
 /** Streaming counterpart of `generateHint` (Phase 11 §2/§6) — see generateSocraticMessageStream for the fallback/error contract. */
 export async function* generateHintStream(
-  ctx: ConceptFacts & { level: 1 | 2 | 3; tutorPrompt: string; userId?: string | null; signal?: AbortSignal },
+  ctx: ConceptFacts & {
+    level: 1 | 2 | 3;
+    tutorPrompt: string;
+    userId?: string | null;
+    sessionId?: string | null;
+    signal?: AbortSignal;
+  },
 ): AsyncGenerator<string, string, void> {
   const { system, prompt } = buildHintPromptText(ctx);
   let acc = "";
@@ -194,8 +215,10 @@ export async function* generateHintStream(
       model: env.AI_MODEL_TUTOR_GENERATION,
       system,
       prompt,
+      maxTokens: AI_MAX_TOKENS.HINT,
       requestType: "TUTOR_HINT",
       userId: ctx.userId,
+      sessionId: ctx.sessionId,
       signal: ctx.signal,
     });
     for await (const event of stream) {
@@ -224,7 +247,12 @@ function fallbackExplanation(ctx: ConceptFacts): ExplanationContent {
 }
 
 export async function generateExplanation(
-  ctx: ConceptFacts & { strategy: string; sourceChunks: Array<{ citation: string; text: string }>; userId?: string | null },
+  ctx: ConceptFacts & {
+    strategy: string;
+    sourceChunks: Array<{ citation: string; text: string }>;
+    userId?: string | null;
+    sessionId?: string | null;
+  },
 ): Promise<ExplanationContent> {
   const { system, prompt, schema } = buildExplanationPrompt(ctx);
   try {
@@ -234,8 +262,10 @@ export async function generateExplanation(
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.TUTOR,
         requestType: "TUTOR_EXPLANATION",
         userId: ctx.userId,
+        sessionId: ctx.sessionId,
       }),
     );
     return ExplanationContentSchema.parse(data);
@@ -262,6 +292,7 @@ export async function* generateExplanationStream(
     strategy: string;
     sourceChunks: Array<{ citation: string; text: string }>;
     userId?: string | null;
+    sessionId?: string | null;
     signal?: AbortSignal;
   },
 ): AsyncGenerator<string, string, void> {
@@ -272,8 +303,10 @@ export async function* generateExplanationStream(
       model: env.AI_MODEL_TUTOR_GENERATION,
       system,
       prompt,
+      maxTokens: AI_MAX_TOKENS.TUTOR,
       requestType: "TUTOR_EXPLANATION",
       userId: ctx.userId,
+      sessionId: ctx.sessionId,
       signal: ctx.signal,
     });
     for await (const event of stream) {
@@ -306,7 +339,7 @@ function fallbackTeachBackEvaluation(): TeachBackEvaluation {
 }
 
 export async function evaluateTeachBack(
-  ctx: ConceptFacts & { studentExplanation: string; userId?: string | null },
+  ctx: ConceptFacts & { studentExplanation: string; userId?: string | null; sessionId?: string | null },
 ): Promise<TeachBackEvaluation> {
   const { system, prompt, schema } = buildTeachBackEvaluationPrompt(ctx);
   try {
@@ -316,8 +349,10 @@ export async function evaluateTeachBack(
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.EVALUATION,
         requestType: "TUTOR_TEACH_BACK_EVALUATION",
         userId: ctx.userId,
+        sessionId: ctx.sessionId,
       }),
     );
     return TeachBackEvaluationSchema.parse(data);

@@ -11,6 +11,7 @@ import type {
 } from "@/generated/prisma/client";
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
+import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import { buildHintGenerationPrompt, HintGenerationSchema } from "@/lib/ai/prompts/hint-generation";
 import { evaluateAnswer, type AnswerEvaluationResult } from "@/lib/ai/answer-evaluator";
 import { recordLearningOutcome, type MistakeInput } from "./record-outcome";
@@ -460,6 +461,7 @@ export async function requestHint(params: {
       system,
       prompt,
       schema: HintGenerationSchema,
+      maxTokens: AI_MAX_TOKENS.HINT,
       requestType: "HINT_GENERATION",
       userId: params.userId,
     }),

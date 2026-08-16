@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
+import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import {
   buildAnswerGradingPrompt,
   buildExamQuestionGenerationPrompt,
@@ -32,6 +33,7 @@ export async function generateExamQuestionContent(
       system,
       prompt,
       schema,
+      maxTokens: AI_MAX_TOKENS.EXAM,
       requestType: "EXAM_QUESTION_GENERATION",
       userId,
     }),
@@ -60,6 +62,7 @@ export async function gradeExamAnswer(ctx: AnswerGradingContext, userId: string)
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.EVALUATION,
         requestType: "EXAM_ANSWER_GRADING",
         userId,
       }),
@@ -84,6 +87,7 @@ export async function generateOralExaminerMessage(ctx: OralExaminerContext, user
         system,
         prompt,
         schema,
+        maxTokens: AI_MAX_TOKENS.HINT,
         requestType: "EXAM_ORAL_EXAMINER",
         userId,
       }),

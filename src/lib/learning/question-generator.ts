@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { env } from "@/lib/env";
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
+import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
 import {
   buildQuestionGenerationPrompt,
   QuestionGenerationSchema,
@@ -167,6 +168,7 @@ export async function getOrGenerateQuestion(params: GenerateQuestionParams): Pro
         system,
         prompt,
         schema: QuestionGenerationSchema,
+        maxTokens: AI_MAX_TOKENS.EXAM,
         requestType: params.purpose ?? "QUESTION_GENERATION",
         userId: params.userId,
       }),

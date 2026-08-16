@@ -152,3 +152,28 @@ each phase depends on the previous one's persisted data model.
       (TEACH_BACK, COMPLETE) go straight to `complete` with no fabricated
       streaming. Development-only `[TUTOR_LATENCY]` logging reports
       decision/TTFT/generation/persistence/total timings per turn.
+- [x] **Phase 12 — AI cost & token optimization.** No changes to
+      `TutorEngine`, the learning architecture, or any evaluation logic —
+      every Claude call was audited and now has an explicit, env-configurable
+      output-token ceiling (`src/lib/ai/token-budgets.ts`) instead of
+      falling through to `extractStructured`/`streamText`'s old unbounded
+      default (4096/1024). Pricing is centralized in a single table
+      (`src/lib/ai/pricing.ts`'s `calculateAiCost()`) instead of scattered
+      constants. The pre-existing `AiUsageLog` model (Phase 3) gained
+      `sessionId`/`latencyMs`/`success` columns; `extractStructured` and
+      `streamText` now log every call — including failures, not just
+      successes — and `src/lib/ai/usage-aggregation.ts` adds reusable cost/
+      token queries (by model, by operation, requests/day, most expensive
+      operations) for a future admin phase. The Tutor's conversation window
+      (already bounded at 6 turns) is now sourced from `AI_CONTEXT_RECENT_
+      MESSAGES` instead of a hardcoded constant; sessions longer than
+      `AI_CONTEXT_MAX_MESSAGES` get a deterministic (non-AI) summary of the
+      turns that fall outside that window instead of silently losing them.
+      A short-TTL in-memory dedup cache (`src/lib/ai/cache.ts`) makes an
+      identical (session, content) resubmission — double-click, retry,
+      streaming reconnect — replay the first attempt's result instead of
+      re-running the decision pipeline and paying for a second Claude call;
+      only successful turns are cached, so a genuine failure always retries
+      for real. Model routing was reviewed call-by-call and left unchanged
+      — every operation was already correctly routed to `fast` or
+      `default`.

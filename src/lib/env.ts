@@ -28,6 +28,21 @@ const envSchema = z.object({
   // cheaper/faster one — same split as Phase 5/7.
   AI_MODEL_EXAM_GENERATION: z.enum(["fast", "default"]).default("fast"),
   AI_MODEL_EXAM_GRADING: z.enum(["fast", "default"]).default("default"),
+  // Phase 12 (AI cost & token optimization): explicit, tunable ceilings so no
+  // call ever falls back to extractStructured/streamText's own generic
+  // default (4096 / 1024) — see src/lib/ai/token-budgets.ts for exactly
+  // which requestType maps to which budget and why each default was chosen.
+  AI_HINT_MAX_TOKENS: z.coerce.number().int().positive().default(200),
+  AI_TUTOR_MAX_TOKENS: z.coerce.number().int().positive().default(500),
+  AI_EVALUATION_MAX_TOKENS: z.coerce.number().int().positive().default(1000),
+  AI_EXAM_MAX_TOKENS: z.coerce.number().int().positive().default(1600),
+  // How many of a Tutor session's most recent messages are sent to Claude
+  // verbatim (replaces the old hardcoded CONVERSATION_HISTORY_WINDOW).
+  AI_CONTEXT_RECENT_MESSAGES: z.coerce.number().int().positive().default(6),
+  // Once a session's total message count exceeds this, everything older
+  // than AI_CONTEXT_RECENT_MESSAGES is replaced by a deterministic (non-AI)
+  // summary instead of being silently dropped — see src/lib/tutor/context.ts.
+  AI_CONTEXT_MAX_MESSAGES: z.coerce.number().int().positive().default(12),
 });
 
 export type Env = z.infer<typeof envSchema>;

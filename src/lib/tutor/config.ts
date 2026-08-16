@@ -1,3 +1,5 @@
+import { env } from "@/lib/env";
+
 /**
  * Tunable thresholds for the tutor engine, named and documented rather than
  * inlined magic numbers — same convention as src/lib/learning/adaptive/config.ts.
@@ -61,8 +63,14 @@ export const MISCONCEPTION_INITIAL_CONFIDENCE: Record<"LOW" | "MEDIUM" | "HIGH" 
   CRITICAL: 1.0,
 };
 
-/** How many recent conversation turns are sent to Claude as context (spec §36 — never the whole course). */
-export const CONVERSATION_HISTORY_WINDOW = 6;
+/**
+ * How many recent conversation turns are sent to Claude verbatim (spec §36
+ * — never the whole course). Phase 12: now sourced from
+ * `AI_CONTEXT_RECENT_MESSAGES` instead of a hardcoded literal, so it can be
+ * tuned without a code change; re-exported under its original name since
+ * tutor-state.ts is still the only reader.
+ */
+export const CONVERSATION_HISTORY_WINDOW = env.AI_CONTEXT_RECENT_MESSAGES;
 
 /** How many recent LearningAttempt scores inform illusion-of-competence / repeated-failure checks. */
 export const RECENT_ATTEMPT_WINDOW = 5;

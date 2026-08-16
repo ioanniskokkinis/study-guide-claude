@@ -4,6 +4,7 @@ import { calculateConceptValue } from "@/lib/learning/adaptive/concept-scoring";
 import { bucketForStatus } from "@/lib/services/student-knowledge";
 import { selectDifficultyForConcept } from "@/lib/learning/difficulty-engine";
 import { RECENT_ATTEMPT_WINDOW, CONVERSATION_HISTORY_WINDOW } from "./config";
+import { buildConversationSummary } from "./context";
 import type { ConversationTurn, MisconceptionState, TutorContext, TutorModeValue } from "./types";
 
 /**
@@ -29,7 +30,7 @@ export async function getTutorContext(params: {
   });
   if (!concept) return null;
 
-  const [state, mastery, recentMistakes, misconceptions, recentAttempts, goal, currentDifficulty, conversationHistory] =
+  const [state, mastery, recentMistakes, misconceptions, recentAttempts, goal, currentDifficulty, conversationHistory, conversationSummary] =
     await Promise.all([
       getStudentLearningState(params.userId, params.courseId),
       prisma.studentConceptMastery.findUnique({
@@ -58,6 +59,7 @@ export async function getTutorContext(params: {
       }),
       selectDifficultyForConcept(params.userId, params.conceptId, concept.difficulty),
       params.sessionId ? loadConversationHistory(params.sessionId) : Promise.resolve([]),
+      params.sessionId ? buildConversationSummary(params.sessionId, CONVERSATION_HISTORY_WINDOW) : Promise.resolve(null),
     ]);
 
   const prerequisiteState = state
@@ -88,6 +90,7 @@ export async function getTutorContext(params: {
     learningGoalDaysUntilExam: daysUntilExam,
     currentDifficulty,
     conversationHistory,
+    conversationSummary,
     currentActivity: params.mode,
     latestStudentResponse: params.latestStudentResponse ?? null,
   };

@@ -20,11 +20,33 @@ export interface ConceptFacts {
   masteryBucket: "unknown" | "weak" | "developing" | "strong";
   recentMistakeDescriptions: string[];
   conversationHistory: Array<{ role: string; content: string }>;
+  /** Deterministic recap of turns older than `conversationHistory`'s window — omitted from the prompt entirely when null (Phase 12 §7). */
+  conversationSummary?: string | null;
+}
+
+/**
+ * Defensive per-turn character cap for the prompt only (Phase 12 §16) —
+ * `MAX_MESSAGE_LENGTH` (tutor-orchestrator.ts) already bounds what a
+ * student can submit to 4000 chars, but that still allows a 6-turn window
+ * to balloon to ~24k chars of context in the worst case (a student
+ * repeatedly pasting long text). A truncated turn is still meaningful
+ * context — it doesn't remove the turn, just its excess length — so this
+ * is a safety ceiling, not a quality cut; ordinary Socratic/hint/answer
+ * turns are always far under this limit.
+ */
+const CONTEXT_TURN_MAX_CHARS = 600;
+
+function truncateForContext(content: string): string {
+  if (content.length <= CONTEXT_TURN_MAX_CHARS) return content;
+  if (process.env.NODE_ENV !== "production") {
+    console.warn(`[TUTOR_CONTEXT_SAFETY_LIMIT] a conversation turn (${content.length} chars) exceeded CONTEXT_TURN_MAX_CHARS=${CONTEXT_TURN_MAX_CHARS} and was truncated for the prompt only — the stored message is unaffected.`);
+  }
+  return `${content.slice(0, CONTEXT_TURN_MAX_CHARS)}… [truncated]`;
 }
 
 function conversationBlock(history: ConceptFacts["conversationHistory"]): string {
   if (history.length === 0) return "(no prior conversation this session)";
-  return history.map((turn) => `${turn.role}: ${turn.content}`).join("\n");
+  return history.map((turn) => `${turn.role}: ${truncateForContext(turn.content)}`).join("\n");
 }
 
 /**
@@ -47,6 +69,9 @@ function conceptBlock(ctx: ConceptFacts): string[] {
   ];
   if (ctx.recentMistakeDescriptions.length > 0) {
     lines.push(`Recent unresolved mistakes on this concept:\n${ctx.recentMistakeDescriptions.map((m) => `- ${m}`).join("\n")}`);
+  }
+  if (ctx.conversationSummary) {
+    lines.push(ctx.conversationSummary);
   }
   lines.push(`Recent conversation:\n${conversationBlock(ctx.conversationHistory)}`);
   return lines;

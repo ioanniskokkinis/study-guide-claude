@@ -132,6 +132,8 @@ export interface TutorContext {
   learningGoalDaysUntilExam: number | null;
   currentDifficulty: number;
   conversationHistory: ConversationTurn[];
+  /** Deterministic (non-AI) recap of turns older than `conversationHistory`'s window, or null for a short session where nothing was dropped (Phase 12 §7). */
+  conversationSummary: string | null;
   currentActivity: TutorModeValue;
   latestStudentResponse: string | null;
 }
