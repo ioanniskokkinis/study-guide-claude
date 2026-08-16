@@ -84,6 +84,9 @@ export async function buildKnowledgeGraph(
       options,
     );
     summary.conceptsMerged += semanticMerge.mergedCount;
+    if (semanticMerge.skippedReason) {
+      summary.errors.push(semanticMerge.skippedReason);
+    }
 
     const finalConcepts = semanticMerge.concepts;
     const conceptSummaries = toConceptSummaries(finalConcepts);

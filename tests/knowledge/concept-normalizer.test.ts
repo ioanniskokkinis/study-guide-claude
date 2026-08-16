@@ -100,4 +100,28 @@ describe("mergeSemanticDuplicates", () => {
     expect(mergedCount).toBe(0);
     expect(extractStructured).not.toHaveBeenCalled();
   });
+
+  it("degrades gracefully instead of throwing when the AI call fails (e.g. output exceeds the schema's cap)", async () => {
+    vi.mocked(extractStructured).mockRejectedValue(
+      new Error('Failed to parse structured output: [{"path":["duplicateGroups"],"message":"Too big"}]'),
+    );
+
+    const concepts = [
+      { name: "TCP", normalizedName: "tcp", description: "...", difficulty: 2, evidence: [] },
+      {
+        name: "Transmission Control Protocol",
+        normalizedName: "transmission control protocol",
+        description: "...",
+        difficulty: 2,
+        evidence: [],
+      },
+    ];
+
+    const result = await mergeSemanticDuplicates("Course", concepts, 0.9);
+
+    // The deterministic candidates are preserved as-is — a best-effort AI failure never discards them.
+    expect(result.concepts).toHaveLength(2);
+    expect(result.mergedCount).toBe(0);
+    expect(result.skippedReason).toBeTruthy();
+  });
 });

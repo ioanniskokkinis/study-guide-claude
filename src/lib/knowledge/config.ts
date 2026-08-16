@@ -29,3 +29,13 @@ export const RELATIONSHIP_CONFIDENCE = {
 
 /** How confident the semantic-duplicate pass must be before two concept names are merged. */
 export const CONCEPT_MERGE_CONFIDENCE_THRESHOLD = 0.9;
+
+/**
+ * Safety cap on how many duplicate-name groups the semantic-duplicate pass
+ * may return in one response. Must stay generous relative to course size —
+ * a large course (many documents, many chunks) can legitimately produce
+ * well over a small cap's worth of genuine near-duplicate concept names,
+ * and a response that merely exceeds the cap is not a sign of anything
+ * wrong with the extraction itself.
+ */
+export const MAX_SEMANTIC_DUPLICATE_GROUPS = 150;

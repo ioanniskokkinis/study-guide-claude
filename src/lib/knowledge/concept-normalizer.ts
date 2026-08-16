@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { extractStructured } from "@/lib/ai/claude";
 import type { CandidateConcept, CandidateConceptEvidence } from "./concept-extractor";
+import { MAX_SEMANTIC_DUPLICATE_GROUPS } from "./config";
 
 /**
  * Deterministic, always-safe normalization: case, whitespace, and
@@ -69,7 +70,7 @@ const SemanticDuplicateSchema = z.object({
         confidence: z.number().min(0).max(1),
       }),
     )
-    .max(30),
+    .max(MAX_SEMANTIC_DUPLICATE_GROUPS),
 });
 
 const SEMANTIC_MERGE_SYSTEM = `You are reviewing a list of concept names extracted from a single course to find near-duplicates: different names that refer to the EXACT SAME underlying concept (for example, an abbreviation and its full form, or minor rewording of the identical idea).
@@ -111,17 +112,32 @@ export async function mergeSemanticDuplicates(
   concepts: MergedConcept[],
   threshold: number,
   options?: { userId?: string | null },
-): Promise<{ concepts: MergedConcept[]; mergedCount: number }> {
+): Promise<{ concepts: MergedConcept[]; mergedCount: number; skippedReason?: string }> {
   if (concepts.length < 2) {
     return { concepts, mergedCount: 0 };
   }
 
   const byName = new Map(concepts.map((concept) => [concept.name, concept]));
-  const { duplicateGroups } = await findSemanticDuplicateGroups(
-    courseTitle,
-    concepts.map((concept) => concept.name),
-    options,
-  );
+
+  let duplicateGroups: z.infer<typeof SemanticDuplicateSchema>["duplicateGroups"];
+  try {
+    ({ duplicateGroups } = await findSemanticDuplicateGroups(
+      courseTitle,
+      concepts.map((concept) => concept.name),
+      options,
+    ));
+  } catch (error) {
+    // This pass is explicitly best-effort (see findSemanticDuplicateGroups above) — a failure here
+    // (a malformed/too-large model response, a transient AI error, etc.) must never discard the
+    // rest of an otherwise-successful knowledge graph build. Fall back to the deterministic merge
+    // only, and let the caller decide whether/how to surface that it was skipped.
+    console.error(`Semantic duplicate detection failed for course "${courseTitle}", skipping semantic merge:`, error);
+    return {
+      concepts,
+      mergedCount: 0,
+      skippedReason: "Could not check for near-duplicate concept names this time; only exact-name matches were merged.",
+    };
+  }
 
   const absorbedNames = new Set<string>();
   let mergedCount = 0;
