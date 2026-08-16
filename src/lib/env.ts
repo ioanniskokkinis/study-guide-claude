@@ -66,6 +66,15 @@ const envSchema = z.object({
   AUDIO_STORAGE_ROOT: z.string().default("./storage/audio"),
   // A Tutor message's cleaned speech text longer than this is split at sentence boundaries (spec §13) rather than sent to the provider in one huge request or silently truncated.
   TTS_MAX_CHARACTERS: z.coerce.number().int().positive().default(2000),
+  // Phase 15 (Study Advisor): roadmap generation is a planning/reasoning
+  // task (prioritization + sequencing over a compact context), the same
+  // caliber of call as Tutor evaluation/exam grading — defaults to the
+  // stronger tier, same split as every other AI_MODEL_* setting.
+  AI_MODEL_STUDY_ADVISOR: z.enum(["fast", "default"]).default("default"),
+  // Output budget for one roadmap generation call — a full multi-week plan
+  // with per-week reasons and priority explanations needs more room than a
+  // single evaluation/hint (see src/lib/ai/token-budgets.ts).
+  AI_STUDY_ADVISOR_MAX_TOKENS: z.coerce.number().int().positive().default(2500),
 });
 
 export type Env = z.infer<typeof envSchema>;

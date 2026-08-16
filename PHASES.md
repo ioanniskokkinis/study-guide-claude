@@ -247,3 +247,54 @@ each phase depends on the previous one's persisted data model.
       auto-started. A TTS failure never alters Tutor session state or
       leaves the text response unreadable — the message stays fully
       visible with a small retry affordance.
+- [x] **Phase 15 — Study Advisor + Knowledge Hub + PDF export.** Two
+      additive layers on top of everything built so far — no parallel
+      Tutor, ingestion pipeline, or scoring system.
+      **Knowledge Hub:** a new `Folder` model (self-referential
+      `parentFolderId` tree, cascading delete with best-effort storage
+      cleanup) and `Document.folderId`/`contentHash` give multi-file
+      organization and SHA-256 duplicate detection (scoped per course) on
+      top of the unchanged Phase 2 ingestion pipeline — `uploadDocument`
+      itself never changed shape; a new `uploadDocumentDeduped` wraps it
+      for the bulk path. A multi-file upload route processes each file
+      independently (`uploadDocumentDeduped` + existing `processDocument`),
+      so one bad file never fails the batch. The course page's Documents
+      section is now a client `KnowledgeHub` component: folder navigation,
+      drag & drop multi-upload with per-file status, bulk move/delete/
+      retry, and filename/folder search — replacing the old single-file
+      `UploadPdfForm` (deleted, now genuinely dead code).
+      **Study Advisor:** decides *what* to study, *when*, and *how much*
+      time to allocate — never *how* (every actual learning action still
+      routes through the existing Tutor/Active Recall/Exam/Review). Its
+      knowledge-gap analysis is not a new scoring formula — it reuses
+      Phase 6's `getStudentLearningState()`/`calculateConceptValue()`
+      exactly, filtered to a resolved material scope (course/folder/
+      documents, traced relationally via a new `StudyRoadmapDocument` join,
+      never just a label). A deterministic time-budget calculator
+      (`src/lib/advisor/time-budget.ts`) computes available minutes from
+      `minutesPerDay`/`studyDays`/deadline entirely in TypeScript; the one
+      Claude call (`STUDY_ADVISOR_ROADMAP`, logged to `AiUsageLog` exactly
+      like every other call since Phase 12 — no separate tracking
+      mechanism needed) only decides prioritization, sequencing, and
+      weekly narrative from a compact context (goal, deadline, time
+      budget, scope label, ranked priority list — never raw document
+      text), and any concept id it returns outside the allowed candidate
+      set is dropped before persisting. Per-item `reason` text is composed
+      deterministically from the same evidence numbers the adaptive engine
+      already computed (`src/lib/advisor/reasons.ts`) — "your recent
+      accuracy is 48%" is always a real number, never an AI guess. Weekly/
+      daily scheduling is a deterministic round-robin over each week's
+      actual study dates, capped at `minutesPerDay`, persisted as
+      `StudyRoadmap`/`StudyRoadmapWeek`/`StudyRoadmapItem`. Roadmap pages
+      are always DB → render, never DB → AI → render. Progress blends live
+      current mastery (dominant signal), item completion, and milestone
+      completion — not just a completed/total ratio. Replanning
+      (`src/lib/advisor/replan.ts`) re-runs the same deterministic pipeline
+      against current state and persists a new version linked via
+      `replacesRoadmapId`, archiving (never deleting) the one it replaces;
+      completed work naturally deprioritizes itself through the same
+      mastery-based scoring, with no special-casing required.
+      **PDF export:** `src/lib/pdf/roadmap-pdf.ts` (pdf-lib, moved from
+      devDependencies to dependencies) renders a persisted roadmap
+      deterministically — no AI call, no fabricated content, never a raw
+      database id in the output.

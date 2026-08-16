@@ -45,6 +45,7 @@ model User {
   reviewItems           ReviewItem[]
   reviewEvents          ReviewEvent[]
   ttsUsageLogs          TtsUsageLog[]
+  studyRoadmaps         StudyRoadmap[]
 
   @@map("users")
 }
@@ -79,6 +80,7 @@ model Course {
 
   user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   documents            Document[]
+  folders              Folder[]
   concepts             Concept[]
   questions            Question[]
   studySessions        StudySession[]
@@ -87,6 +89,7 @@ model Course {
   tutorSessions        TutorSession[]
   exams                Exam[]
   reviewItems          ReviewItem[]
+  studyRoadmaps        StudyRoadmap[]
 
   @@index([userId])
   @@map("courses")
@@ -108,6 +111,8 @@ enum ProcessingStatus {
 model Document {
   id               String           @id @default(cuid())
   courseId         String
+  /// Optional Knowledge Hub folder (Phase 15) — null means "directly under the course," same as every document before this phase.
+  folderId         String?
   filename         String
   originalFilename String
   mimeType         String
@@ -118,14 +123,51 @@ model Document {
   processingStatus ProcessingStatus @default(UPLOADED)
   processingError  String?
   pageCount        Int?
+  /// SHA-256 of the raw uploaded bytes (Phase 15 §13) — duplicate detection within a course. Null for documents uploaded before this phase (backfill not required; they simply never match as duplicates).
+  contentHash      String?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
   course Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  folder Folder?         @relation(fields: [folderId], references: [id], onDelete: Cascade)
   chunks DocumentChunk[]
 
+  roadmapScopes      StudyRoadmapDocument[]
+  roadmapItemSources StudyRoadmapItem[]
+
   @@index([courseId])
+  @@index([folderId])
+  @@index([courseId, contentHash])
   @@map("documents")
+}
+
+/// Knowledge Hub folder (Phase 15 §3-5) — a simple, ownership-scoped tree via
+/// `parentFolderId`. Deletion cascades to child folders and their documents
+/// (same "hard delete, no soft-delete/trash" convention this app has used
+/// since Phase 1 for Course/Document), so the delete-folder API route
+/// requires an explicit confirmation the same way DeleteCourseButton /
+/// DeleteDocumentButton already do — see src/lib/services/folders.ts for the
+/// circular-move and cross-course guards enforced before any write.
+model Folder {
+  id             String   @id @default(cuid())
+  courseId       String
+  parentFolderId String?
+  name           String
+  /// Manual display ordering within a parent (Phase 15 §4) — ties broken by createdAt.
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  course       Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  parentFolder Folder?    @relation("FolderChildren", fields: [parentFolderId], references: [id], onDelete: Cascade)
+  childFolders Folder[]   @relation("FolderChildren")
+  documents    Document[]
+
+  roadmapScopes StudyRoadmap[]
+
+  @@index([courseId])
+  @@index([parentFolderId])
+  @@map("folders")
 }
 
 model DocumentChunk {
@@ -197,6 +239,7 @@ model Concept {
   examQuestions         ExamQuestion[]
   reviewItems           ReviewItem[]
   reviewEvents          ReviewEvent[]
+  roadmapItems          StudyRoadmapItem[]
 
   // Prevents duplicate concepts within a course (spec §2, §11 dedup).
   @@unique([courseId, normalizedName])
@@ -971,7 +1014,7 @@ model TutorMessage {
   metadata    Json?
   createdAt   DateTime         @default(now())
 
-  session TutorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session TutorSession        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   audio   TutorMessageAudio[]
 
   @@index([sessionId])
@@ -1366,4 +1409,188 @@ model TutorMessageAudio {
   @@unique([messageId, voice, model, textHash])
   @@index([messageId])
   @@map("tutor_message_audio")
+}
+
+// ---------------------------------------------------------------------------
+// Study Advisor (Phase 15)
+//
+// Decides WHAT to study, WHEN, and HOW MUCH time to allocate — never HOW
+// (that's the Tutor/Active Recall/Exam/Review, all reused unchanged as the
+// roadmap's "action" targets). Knowledge-gap scoring is NOT reimplemented
+// here: roadmap generation reuses Phase 6's calculateConceptValue() over a
+// scope-filtered StudentLearningState (src/lib/advisor/knowledge-gaps.ts),
+// so a StudyRoadmapItem's `reason` is grounded in the exact same weakness/
+// prerequisite/forgetting-risk/goal-relevance numbers the adaptive engine
+// already computes — never AI-fabricated statistics (spec §38).
+//
+// No separate "StudyAdvisorProfile" model: goal/deadline/time-budget input
+// is advisor-specific and doesn't need to outlive one roadmap the way
+// Phase 6's LearningGoal does (which stays untouched here), so those fields
+// are stored directly on StudyRoadmap — see spec §23's own "avoid
+// unnecessary duplication" / "do not over-model" guidance.
+// ---------------------------------------------------------------------------
+
+enum StudyRoadmapScopeType {
+  COURSE
+  FOLDER
+  DOCUMENTS
+}
+
+enum StudyRoadmapStatus {
+  ACTIVE
+  COMPLETED
+  /// Superseded by a newer version via Replan (spec §36-37) — never deleted, so the original stays inspectable.
+  ARCHIVED
+}
+
+/// One planning cycle. Replanning never mutates or deletes an existing
+/// roadmap (spec §36) — it creates a new row with `replacesRoadmapId`
+/// pointing at the one it supersedes, and flips the old row's status to
+/// ARCHIVED, so the full version history stays queryable.
+model StudyRoadmap {
+  id       String @id @default(cuid())
+  userId   String
+  courseId String
+
+  title         String
+  /// Free-text goal, e.g. "Pass my Biology exam" (spec §22's own example) — deliberately not the enum-typed LearningGoal.type, since the Advisor's goal is a student-authored sentence, not a fixed category.
+  goal          String
+  targetScore   Float?
+  deadline      DateTime?
+  /// How many minutes/day the student says they can study — the deterministic time-budget input (spec §29).
+  minutesPerDay Int
+  /// Weekday indices (0=Sunday..6=Saturday) the student is available to study — an empty/omitted array means every day.
+  studyDays     Json
+  status        StudyRoadmapStatus @default(ACTIVE)
+
+  scopeType     StudyRoadmapScopeType
+  /// Set only when scopeType=FOLDER — the roadmap's traceable source scope (spec §19, §31), never just a display string.
+  scopeFolderId String?
+
+  /// AI-authored, but only ever generated from the compact deterministic context built in src/lib/advisor/context.ts — never from raw document text (spec §26).
+  summary         String
+  risks           Json
+  recommendations Json
+
+  version           Int     @default(1)
+  /// The roadmap this one replaced via Replan — null for an original (non-replanned) roadmap.
+  replacesRoadmapId String? @unique
+
+  startDate DateTime
+  endDate   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course          Course                 @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  scopeFolder     Folder?                @relation(fields: [scopeFolderId], references: [id], onDelete: SetNull)
+  scopeDocuments  StudyRoadmapDocument[]
+  weeks           StudyRoadmapWeek[]
+  items           StudyRoadmapItem[]
+  replacesRoadmap StudyRoadmap?          @relation("RoadmapVersion", fields: [replacesRoadmapId], references: [id], onDelete: SetNull)
+  replacedBy      StudyRoadmap?          @relation("RoadmapVersion")
+
+  @@index([userId, courseId])
+  @@index([userId, status])
+  @@map("study_roadmaps")
+}
+
+/// Persists the exact document set for a DOCUMENTS-scoped roadmap (spec
+/// §19, §31) — relational, not a display string, so the scope can always be
+/// securely reconstructed and re-verified against the owning user.
+model StudyRoadmapDocument {
+  id         String @id @default(cuid())
+  roadmapId  String
+  documentId String
+
+  roadmap  StudyRoadmap @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  document Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([roadmapId, documentId])
+  @@index([roadmapId])
+  @@map("study_roadmap_documents")
+}
+
+/// One AI-chosen planning week (spec §33-34) — `focusSummary`/`reason` are
+/// the AI's own weekly narrative (spec §27 explicitly reserves "study
+/// strategy"/"rationale" for the AI); `estimatedMinutes` is validated/
+/// clamped server-side against the deterministic time budget before
+/// persisting (spec §29 — a generated plan must never exceed it).
+model StudyRoadmapWeek {
+  id               String   @id @default(cuid())
+  roadmapId        String
+  weekNumber       Int
+  startDate        DateTime
+  endDate          DateTime
+  focusSummary     String
+  reason           String
+  estimatedMinutes Int
+
+  roadmap StudyRoadmap       @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  items   StudyRoadmapItem[]
+
+  @@unique([roadmapId, weekNumber])
+  @@index([roadmapId])
+  @@map("study_roadmap_weeks")
+}
+
+enum StudyRoadmapItemAction {
+  LEARN
+  REVIEW
+  PRACTICE
+  ACTIVE_RECALL
+  SPACED_REPETITION
+  TUTOR
+  EXAM_PRACTICE
+}
+
+enum StudyRoadmapItemStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+}
+
+/// One executable line of the daily/weekly plan (spec §32-33). `reason` is
+/// composed deterministically server-side from the same evidence
+/// calculateConceptValue() already surfaces (spec §38 — "prioritized
+/// because your recent accuracy is 48%" must be a real number, never an AI
+/// guess). `baselineMastery` snapshots this concept's overallMastery at
+/// generation time so progress (spec §35) can measure real improvement,
+/// not just item-completion ratio. `sourceDocumentId` is set only when the
+/// concept's strongest evidence traces to one specific document (spec §20)
+/// — left null rather than fabricated when the recommendation comes from
+/// aggregated knowledge data instead.
+model StudyRoadmapItem {
+  id        String  @id @default(cuid())
+  roadmapId String
+  weekId    String?
+  conceptId String?
+
+  action           StudyRoadmapItemAction
+  title            String
+  estimatedMinutes Int
+  priority         Float
+  reason           String
+  scheduledDate    DateTime?
+  status           StudyRoadmapItemStatus @default(PENDING)
+  completedAt      DateTime?
+  isMilestone      Boolean                @default(false)
+  baselineMastery  Float?
+  sourceDocumentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roadmap        StudyRoadmap      @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  week           StudyRoadmapWeek? @relation(fields: [weekId], references: [id], onDelete: SetNull)
+  concept        Concept?          @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  sourceDocument Document?         @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([roadmapId])
+  @@index([weekId])
+  @@index([roadmapId, scheduledDate])
+  @@index([conceptId])
+  @@map("study_roadmap_items")
 }

@@ -35,6 +35,10 @@ export const AI_MAX_TOKENS = {
   TUTOR: env.AI_TUTOR_MAX_TOKENS,
   EVALUATION: env.AI_EVALUATION_MAX_TOKENS,
   EXAM: env.AI_EXAM_MAX_TOKENS,
+  // Phase 15: a full multi-week roadmap (summary + per-concept reasons +
+  // per-week structure + milestones/risks/recommendations) — the largest
+  // structured schema in the app after EXAM, sized accordingly.
+  STUDY_ADVISOR: env.AI_STUDY_ADVISOR_MAX_TOKENS,
 } as const;
 
 export type AiMaxTokensCategory = keyof typeof AI_MAX_TOKENS;

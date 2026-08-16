@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/dev-user";
-import { findOwnedCourse } from "@/lib/services/courses";
+import { findOwnedCourse, getCourseWithDocuments } from "@/lib/services/courses";
 import { uploadDocument } from "@/lib/services/documents";
 import { UploadValidationError } from "@/lib/documents/validation";
 
@@ -8,6 +8,19 @@ export const runtime = "nodejs";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
+}
+
+/** Used by the Knowledge Hub UI to refresh its document list after a mutation, without a full page navigation. */
+export async function GET(_request: Request, { params }: RouteContext) {
+  const { id: courseId } = await params;
+  const user = await getCurrentUser();
+
+  const course = await getCourseWithDocuments(user.id, courseId);
+  if (!course) {
+    return NextResponse.json({ error: "Course not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({ documents: course.documents });
 }
 
 export async function POST(request: Request, { params }: RouteContext) {
