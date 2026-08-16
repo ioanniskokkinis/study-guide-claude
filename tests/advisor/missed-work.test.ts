@@ -108,6 +108,14 @@ describe("getMissedWorkSummary", () => {
   it("does not count items that are already COMPLETED as missed, even if their date passed", async () => {
     const roadmap = await seedRoadmap();
     const item = roadmap.weeks.flatMap((w) => w.items).find((i) => !i.isMilestone)!;
+
+    // Every other item is pushed into the future first so only the COMPLETED item below has a
+    // past scheduledDate — otherwise an unrelated item that happens to land on "today" would
+    // already read as overdue (its scheduledDate is midnight, compared against the current instant).
+    await prisma.studyRoadmapItem.updateMany({
+      where: { roadmapId: roadmap.id, isMilestone: false, id: { not: item.id } },
+      data: { scheduledDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) },
+    });
     await prisma.studyRoadmapItem.update({
       where: { id: item.id },
       data: { status: "COMPLETED", scheduledDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
