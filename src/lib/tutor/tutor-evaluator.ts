@@ -1,12 +1,15 @@
 import { prisma } from "@/lib/db/prisma";
 import { env } from "@/lib/env";
-import { extractStructured } from "@/lib/ai/claude";
+import { extractStructured, streamText, MidStreamGenerationError } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
 import {
   buildExplanationPrompt,
+  buildExplanationPromptText,
   buildHintPrompt,
+  buildHintPromptText,
   buildResponseEvaluationPrompt,
   buildSocraticMessagePrompt,
+  buildSocraticMessagePromptText,
   buildTeachBackEvaluationPrompt,
   type ConceptFacts,
 } from "./tutor-prompts";
@@ -108,6 +111,51 @@ export async function generateSocraticMessage(
   }
 }
 
+/**
+ * Streaming counterpart of `generateSocraticMessage` (Phase 11 §2/§6).
+ * Yields text deltas as they arrive and returns the final message text.
+ * Mirrors the non-streaming function's resilience: a failure before any
+ * text was produced falls back to the same deterministic message (yielded
+ * once, not silently swapped in); a failure after some text was already
+ * streamed to the client throws `MidStreamGenerationError` instead, since
+ * silently substituting a fallback after the student has seen real partial
+ * output would be misleading (Phase 11 §3).
+ */
+export async function* generateSocraticMessageStream(
+  ctx: ConceptFacts & {
+    intent: "new_question" | "followup" | "deepen" | "simplify";
+    difficulty: number;
+    userId?: string | null;
+    signal?: AbortSignal;
+  },
+): AsyncGenerator<string, string, void> {
+  const { system, prompt } = buildSocraticMessagePromptText(ctx);
+  let acc = "";
+  try {
+    const stream = streamText({
+      model: env.AI_MODEL_TUTOR_GENERATION,
+      system,
+      prompt,
+      requestType: "TUTOR_SOCRATIC_MESSAGE",
+      userId: ctx.userId,
+      signal: ctx.signal,
+    });
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        acc += event.delta.text;
+        yield event.delta.text;
+      }
+    }
+  } catch (err) {
+    if (acc.length > 0) throw new MidStreamGenerationError(acc, err);
+    acc = "";
+  }
+  if (acc.trim().length > 0) return acc.trim();
+  const fallback = fallbackSocraticMessage(ctx.conceptName, ctx.intent);
+  yield fallback;
+  return fallback;
+}
+
 function fallbackHint(conceptName: string, level: 1 | 2 | 3): string {
   if (level === 1) return `Think about what ${conceptName} is fundamentally trying to solve.`;
   if (level === 2) return `Consider the specific mechanism ${conceptName} relies on.`;
@@ -133,6 +181,37 @@ export async function generateHint(
   } catch {
     return fallbackHint(ctx.conceptName, ctx.level);
   }
+}
+
+/** Streaming counterpart of `generateHint` (Phase 11 §2/§6) — see generateSocraticMessageStream for the fallback/error contract. */
+export async function* generateHintStream(
+  ctx: ConceptFacts & { level: 1 | 2 | 3; tutorPrompt: string; userId?: string | null; signal?: AbortSignal },
+): AsyncGenerator<string, string, void> {
+  const { system, prompt } = buildHintPromptText(ctx);
+  let acc = "";
+  try {
+    const stream = streamText({
+      model: env.AI_MODEL_TUTOR_GENERATION,
+      system,
+      prompt,
+      requestType: "TUTOR_HINT",
+      userId: ctx.userId,
+      signal: ctx.signal,
+    });
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        acc += event.delta.text;
+        yield event.delta.text;
+      }
+    }
+  } catch (err) {
+    if (acc.length > 0) throw new MidStreamGenerationError(acc, err);
+    acc = "";
+  }
+  if (acc.trim().length > 0) return acc.trim();
+  const fallback = fallbackHint(ctx.conceptName, ctx.level);
+  yield fallback;
+  return fallback;
 }
 
 function fallbackExplanation(ctx: ConceptFacts): ExplanationContent {
@@ -163,6 +242,54 @@ export async function generateExplanation(
   } catch {
     return fallbackExplanation(ctx);
   }
+}
+
+/** Flattens structured explanation fields into the same plain-text shape `formatExplanation()` builds (Phase 11 §2), minus the deterministic Source line, which tutor-orchestrator.ts appends outside any Claude call. */
+function flattenExplanationText(explanation: ExplanationContent): string {
+  return [explanation.coreIdea, `For example: ${explanation.example}`, explanation.connection, explanation.checkQuestion].join("\n\n");
+}
+
+/**
+ * Streaming counterpart of `generateExplanation` (Phase 11 §2/§6). Claude
+ * writes the four explanation parts directly as flowing text (see
+ * `buildExplanationPromptText`) instead of four JSON fields, so the deltas
+ * are readable as they arrive; the returned string already matches
+ * `formatExplanation()`'s shape (minus the Source line) so callers don't
+ * need to reassemble anything.
+ */
+export async function* generateExplanationStream(
+  ctx: ConceptFacts & {
+    strategy: string;
+    sourceChunks: Array<{ citation: string; text: string }>;
+    userId?: string | null;
+    signal?: AbortSignal;
+  },
+): AsyncGenerator<string, string, void> {
+  const { system, prompt } = buildExplanationPromptText(ctx);
+  let acc = "";
+  try {
+    const stream = streamText({
+      model: env.AI_MODEL_TUTOR_GENERATION,
+      system,
+      prompt,
+      requestType: "TUTOR_EXPLANATION",
+      userId: ctx.userId,
+      signal: ctx.signal,
+    });
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        acc += event.delta.text;
+        yield event.delta.text;
+      }
+    }
+  } catch (err) {
+    if (acc.length > 0) throw new MidStreamGenerationError(acc, err);
+    acc = "";
+  }
+  if (acc.trim().length > 0) return acc.trim();
+  const fallback = flattenExplanationText(fallbackExplanation(ctx));
+  yield fallback;
+  return fallback;
 }
 
 function fallbackTeachBackEvaluation(): TeachBackEvaluation {

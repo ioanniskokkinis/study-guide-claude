@@ -27,6 +27,18 @@ function conversationBlock(history: ConceptFacts["conversationHistory"]): string
   return history.map((turn) => `${turn.role}: ${turn.content}`).join("\n");
 }
 
+/**
+ * Derives a plain-text output instruction from a JSON-schema system prompt
+ * (Phase 11 §2) — every base system prompt below ends with "Return
+ * structured JSON only, matching the provided schema."; this swaps that one
+ * instruction for a plain-text one without duplicating the whole prompt
+ * body, so the teaching rules themselves can never drift between the
+ * streaming and non-streaming call shapes.
+ */
+function plainTextSystem(system: string): string {
+  return `${system.replace(/Return structured JSON only, matching the provided schema\.$/, "").trimEnd()}\nOutput format: respond with ONLY the raw text described above — no JSON, no markdown code fences, no field labels, no surrounding quotes.`;
+}
+
 function conceptBlock(ctx: ConceptFacts): string[] {
   const lines = [
     `Concept: ${ctx.conceptName}`,
@@ -91,21 +103,38 @@ export interface SocraticMessageContext extends ConceptFacts {
   difficulty: number;
 }
 
-export function buildSocraticMessagePrompt(ctx: SocraticMessageContext) {
-  const intentInstruction: Record<SocraticMessageContext["intent"], string> = {
-    new_question: "Ask an opening question on this concept, calibrated to the difficulty level given.",
-    followup: "Ask a targeted follow-up question that narrows in on what the student's last response was missing or got partially right.",
-    deepen: "Ask a deeper, transfer-style question that asks the student to apply or extend the concept in a new situation.",
-    simplify: "Ask a simpler, more concrete version of the question — break it into a smaller first step.",
-  };
+const INTENT_INSTRUCTION: Record<SocraticMessageContext["intent"], string> = {
+  new_question: "Ask an opening question on this concept, calibrated to the difficulty level given.",
+  followup: "Ask a targeted follow-up question that narrows in on what the student's last response was missing or got partially right.",
+  deepen: "Ask a deeper, transfer-style question that asks the student to apply or extend the concept in a new situation.",
+  simplify: "Ask a simpler, more concrete version of the question — break it into a smaller first step.",
+};
 
+export function buildSocraticMessagePrompt(ctx: SocraticMessageContext) {
   const sections = [
     ...conceptBlock(ctx),
     `Target difficulty (1=easiest, 5=hardest): ${ctx.difficulty}`,
-    `Intent: ${intentInstruction[ctx.intent]}`,
+    `Intent: ${INTENT_INSTRUCTION[ctx.intent]}`,
     "Write the tutor's next message according to the rules above.",
   ];
   return { system: SOCRATIC_MESSAGE_SYSTEM, prompt: sections.join("\n\n"), schema: SocraticMessageSchema };
+}
+
+/**
+ * Plain-text (non-JSON) variant used only by the Phase 11 streaming path
+ * (Phase 11 §2) — the underlying teaching rules are identical to
+ * `buildSocraticMessagePrompt`; only the output-format instruction changes,
+ * since streamed structured JSON would show the client broken/partial
+ * syntax instead of readable text.
+ */
+export function buildSocraticMessagePromptText(ctx: SocraticMessageContext) {
+  const sections = [
+    ...conceptBlock(ctx),
+    `Target difficulty (1=easiest, 5=hardest): ${ctx.difficulty}`,
+    `Intent: ${INTENT_INSTRUCTION[ctx.intent]}`,
+    "Write the tutor's next message according to the rules above.",
+  ];
+  return { system: plainTextSystem(SOCRATIC_MESSAGE_SYSTEM), prompt: sections.join("\n\n") };
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +175,37 @@ export function buildExplanationPrompt(ctx: ExplanationContext) {
   return { system: EXPLANATION_SYSTEM, prompt: sections.join("\n\n"), schema: ExplanationContentSchema };
 }
 
+/**
+ * Plain-text variant for the Phase 11 streaming path. Rather than four
+ * separate JSON fields, Claude writes the same four parts as plain
+ * paragraphs separated by a blank line, with the second one literally
+ * starting "For example: " — this exactly matches the shape
+ * `formatExplanation()` already produces from the structured fields
+ * (`[coreIdea, "For example: " + example, connection, checkQuestion].join("\n\n")`),
+ * so the persisted content is identical either way; only the wrapper
+ * boundary that appends the deterministic "Source: " line differs (that
+ * append still happens outside Claude, in tutor-orchestrator.ts).
+ */
+export function buildExplanationPromptText(ctx: ExplanationContext) {
+  const sections = [...conceptBlock(ctx), `Explanation strategy to use: ${ctx.strategy}`];
+
+  if (ctx.sourceChunks.length > 0) {
+    sections.push(
+      `Source material:\n${ctx.sourceChunks.map((c) => `[${c.citation}]\n"""\n${c.text}\n"""`).join("\n\n")}`,
+    );
+  }
+
+  sections.push(
+    "Write the explanation as exactly four paragraphs, separated by a single blank line, and nothing else " +
+      "(no labels, no numbering, no JSON, no markdown headers):\n" +
+      "1. The core idea (1-2 sentences).\n" +
+      '2. This paragraph must literally begin with the text "For example: " followed by one concrete example.\n' +
+      "3. One sentence connecting it back to the concept currently being studied.\n" +
+      "4. One small retrieval check question.",
+  );
+  return { system: plainTextSystem(EXPLANATION_SYSTEM), prompt: sections.join("\n\n") };
+}
+
 // ---------------------------------------------------------------------------
 // Progressive hints.
 // ---------------------------------------------------------------------------
@@ -173,6 +233,17 @@ export function buildHintPrompt(ctx: HintContext) {
     "Write the hint according to the rules above.",
   ];
   return { system: HINT_SYSTEM, prompt: sections.join("\n\n"), schema: SocraticMessageSchema };
+}
+
+/** Plain-text variant for the Phase 11 streaming path — see buildSocraticMessagePromptText. */
+export function buildHintPromptText(ctx: HintContext) {
+  const sections = [
+    ...conceptBlock(ctx),
+    `Current question: ${ctx.tutorPrompt}`,
+    `Hint level to give: HINT_${ctx.level}`,
+    "Write the hint according to the rules above.",
+  ];
+  return { system: plainTextSystem(HINT_SYSTEM), prompt: sections.join("\n\n") };
 }
 
 // ---------------------------------------------------------------------------

@@ -130,3 +130,25 @@ each phase depends on the previous one's persisted data model.
       detail page, an unvalidated exam id silently falling through instead
       of 404ing, `ExamGoalForm` swallowing failed requests, and
       `OralExamRunner`'s error state being a dead end with no way back.
+- [x] **Phase 11 — Tutor streaming + UX/latency polish.** No changes to the
+      `TutorEngine` decision architecture, persistence semantics, or rate
+      limiting — Claude's language-generation step for Socratic messages,
+      hints, and explanations now streams via the Anthropic SDK's
+      `messages.stream()` (`streamText()` in `src/lib/ai/claude.ts`), using
+      a plain-text call shape instead of structured JSON extraction since
+      streamed structured output only yields partial-JSON deltas, not
+      readable text. `POST /api/tutor/sessions/:id/messages` now returns a
+      Server-Sent Events `ReadableStream` (`start` / `delta` / `metadata` /
+      `complete` / `error`) built on `streamTutorMessage()`, which shares
+      its decision/evidence/misconception logic with the unchanged
+      non-streaming `submitTutorMessage()` via extracted `prepareTurn()` /
+      `finalizeTurn()` helpers. The final `TutorMessage` is still persisted
+      exactly once, only after the full reply is accumulated server-side —
+      never per-token, never on a failed or cancelled generation. Real
+      upstream cancellation propagates an `AbortSignal` through to the
+      Anthropic streaming call. `TutorChat.tsx` shows the student's message
+      instantly, a streaming placeholder with a cursor that fills in
+      incrementally, a Stop button, and Retry on error. Non-AI actions
+      (TEACH_BACK, COMPLETE) go straight to `complete` with no fabricated
+      streaming. Development-only `[TUTOR_LATENCY]` logging reports
+      decision/TTFT/generation/persistence/total timings per turn.
