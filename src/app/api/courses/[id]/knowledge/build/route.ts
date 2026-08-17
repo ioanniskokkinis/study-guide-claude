@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { KnowledgeBuildInProgressError, triggerKnowledgeBuild } from "@/lib/services/knowledge";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,16 @@ interface RouteContext {
 export async function POST(_request: Request, { params }: RouteContext) {
   const { id: courseId } = await params;
   const user = await getCurrentUser();
+
+  // Phase 19 §19.15 — the in-flight-build 409 guard below stops a second
+  // build from running *concurrently*, but a completed/failed build still
+  // lets a client immediately queue another one; a rebuild fans out into
+  // several Claude calls (concept/relationship/prerequisite extraction), so
+  // this needs its own limit like every other Claude-triggering route.
+  const rateLimit = checkRateLimit(`${user.id}:knowledge-build`, { maxRequests: 5, windowMs: 60_000 });
+  if (!rateLimit.allowed) {
+    return NextResponse.json({ error: "Too many requests. Please wait a moment." }, { status: 429 });
+  }
 
   try {
     const result = await triggerKnowledgeBuild(user.id, courseId);

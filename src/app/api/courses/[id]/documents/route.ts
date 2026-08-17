@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth/dev-user";
 import { findOwnedCourse, getCourseWithDocuments } from "@/lib/services/courses";
 import { uploadDocument } from "@/lib/services/documents";
 import { UploadValidationError } from "@/lib/documents/validation";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,14 @@ export async function POST(request: Request, { params }: RouteContext) {
   const course = await findOwnedCourse(user.id, courseId);
   if (!course) {
     return NextResponse.json({ error: "Course not found." }, { status: 404 });
+  }
+
+  // Phase 19 §19.15 — the bulk-upload route already had this; the single-file
+  // route triggers the identical storage + PDF-processing pipeline per call
+  // and had no limit of its own.
+  const rateLimit = checkRateLimit(`${user.id}:document-upload`, { maxRequests: 20, windowMs: 5 * 60_000 });
+  if (!rateLimit.allowed) {
+    return NextResponse.json({ error: "Too many upload requests. Please wait a moment." }, { status: 429 });
   }
 
   let formData: FormData;
