@@ -101,6 +101,7 @@ export async function synthesizeTutorMessage(params: { messageId: string; userId
   try {
     result = await provider.generate({ text: partText, voice, format: "mp3" });
   } catch (error) {
+    console.error("[tts] provider generation failed", { provider: env.TTS_PROVIDER, model, voice, latencyMs: Date.now() - startedAt, message: error instanceof Error ? error.message : String(error) });
     await logTtsUsage({
       userId: params.userId,
       sessionId: message.sessionId,
@@ -112,6 +113,7 @@ export async function synthesizeTutorMessage(params: { messageId: string; userId
       latencyMs: Date.now() - startedAt,
       cacheHit: false,
       success: false,
+      errorType: "PROVIDER",
     });
     throw error instanceof TTSProviderError ? error : new TTSProviderError("TTS generation failed.", error);
   }
@@ -173,6 +175,8 @@ async function logTtsUsage(params: {
   latencyMs: number;
   cacheHit: boolean;
   success: boolean;
+  /** Coarse failure category (Phase 19 §19.14) — same taxonomy as AiUsageLog.errorType. Omit/null on success. */
+  errorType?: "PROVIDER" | null;
 }): Promise<void> {
   try {
     const estimatedCostUsd = params.cacheHit
@@ -192,6 +196,7 @@ async function logTtsUsage(params: {
         latencyMs: params.latencyMs,
         cacheHit: params.cacheHit,
         success: params.success,
+        errorType: params.errorType ?? null,
       },
     });
   } catch (error) {

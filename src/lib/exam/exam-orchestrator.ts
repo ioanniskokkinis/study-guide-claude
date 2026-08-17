@@ -622,13 +622,17 @@ export async function submitExam(examId: string, userId: string): Promise<ExamRe
   }
   if (exam.status !== "ACTIVE" && exam.status !== "EXPIRED" && exam.status !== "SUBMITTED") throw new ExamNotActiveError();
 
+  // Phase 19 §19.13: batched via createMany instead of one create() per
+  // unanswered question — a 20-30 question exam previously issued that many
+  // sequential round-trips here for no reason, since none of these writes
+  // depend on each other's result.
   const questions = await prisma.examQuestion.findMany({ where: { examId }, include: { answer: true } });
-  for (const q of questions) {
-    if (!q.answer) {
-      await prisma.examAnswer.create({
-        data: { examId, questionId: q.id, userId, classification: "UNANSWERED", score: 0, submittedAt: new Date() },
-      });
-    }
+  const unanswered = questions.filter((q) => !q.answer);
+  if (unanswered.length > 0) {
+    const now = new Date();
+    await prisma.examAnswer.createMany({
+      data: unanswered.map((q) => ({ examId, questionId: q.id, userId, classification: "UNANSWERED" as const, score: 0, submittedAt: now })),
+    });
   }
 
   await prisma.exam.update({ where: { id: exam.id }, data: { status: "SUBMITTED", submittedAt: new Date() } });

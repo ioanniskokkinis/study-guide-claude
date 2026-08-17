@@ -89,6 +89,21 @@ export class AiRequestTimeoutError extends Error {
   }
 }
 
+/**
+ * Coarse failure category (Phase 19 §19.14), mirroring the error-architecture
+ * taxonomy from §19.4 — stored on AiUsageLog/TtsUsageLog so an operator can
+ * query failure patterns (e.g. "how many EXAM_ANSWER_GRADING calls hit rate
+ * limits this week") without a second, competing telemetry system.
+ */
+type AiErrorCategory = "TIMEOUT" | "RATE_LIMIT" | "VALIDATION" | "PROVIDER" | "UNKNOWN";
+
+function categorizeAiError(error: unknown, timedOut: boolean): AiErrorCategory {
+  if (timedOut || error instanceof AiRequestTimeoutError) return "TIMEOUT";
+  if (error instanceof Anthropic.RateLimitError) return "RATE_LIMIT";
+  if (error instanceof Anthropic.APIError) return "PROVIDER";
+  return "UNKNOWN";
+}
+
 export interface StreamTextOptions {
   model: ExtractionModel;
   system: string;
@@ -152,7 +167,9 @@ export function streamText(options: StreamTextOptions): MessageStream {
     });
   });
 
-  stream.once("error", () => {
+  stream.once("error", (error) => {
+    const errorType = categorizeAiError(error, combinedSignal?.aborted === true && options.timeoutMs != null);
+    console.error("[ai] streamText failed", { requestType: options.requestType, model: modelId, errorType, latencyMs: Date.now() - startedAt, message: error instanceof Error ? error.message : String(error) });
     void logAiUsage({
       userId: options.userId ?? null,
       sessionId: options.sessionId ?? null,
@@ -162,6 +179,7 @@ export function streamText(options: StreamTextOptions): MessageStream {
       requestType: options.requestType,
       latencyMs: Date.now() - startedAt,
       success: false,
+      errorType,
     });
   });
 
@@ -200,6 +218,9 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
       controller ? { signal: controller.signal } : undefined,
     );
   } catch (error) {
+    const timedOut = controller?.signal.aborted === true;
+    const errorType = categorizeAiError(error, timedOut);
+    console.error("[ai] extractStructured failed", { requestType: options.requestType, model: modelId, errorType, latencyMs: Date.now() - startedAt, message: error instanceof Error ? error.message : String(error) });
     await logAiUsage({
       userId: options.userId ?? null,
       sessionId: options.sessionId ?? null,
@@ -209,8 +230,9 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
       requestType: options.requestType,
       latencyMs: Date.now() - startedAt,
       success: false,
+      errorType,
     });
-    if (controller?.signal.aborted) {
+    if (timedOut) {
       throw new AiRequestTimeoutError(options.timeoutMs!);
     }
     throw error;
@@ -219,6 +241,7 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
   }
 
   if (response.parsed_output === null) {
+    console.error("[ai] extractStructured schema validation failed", { requestType: options.requestType, model: modelId, latencyMs: Date.now() - startedAt });
     await logAiUsage({
       userId: options.userId ?? null,
       sessionId: options.sessionId ?? null,
@@ -228,6 +251,7 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
       requestType: options.requestType,
       latencyMs: Date.now() - startedAt,
       success: false,
+      errorType: "VALIDATION",
     });
     throw new Error("Claude returned output that did not match the expected schema.");
   }
@@ -246,6 +270,7 @@ export async function extractStructured<T>(options: ExtractOptions<T>): Promise<
     requestType: options.requestType,
     latencyMs: Date.now() - startedAt,
     success: true,
+    errorType: null,
   });
 
   return { data: response.parsed_output as T, usage };
@@ -260,6 +285,7 @@ async function logAiUsage(params: {
   requestType: string;
   latencyMs: number;
   success: boolean;
+  errorType?: AiErrorCategory | null;
 }): Promise<void> {
   const { estimatedTotalCost } = calculateAiCost({
     model: params.model,
@@ -278,6 +304,7 @@ async function logAiUsage(params: {
       requestType: params.requestType,
       latencyMs: params.latencyMs,
       success: params.success,
+      errorType: params.errorType ?? null,
     },
   });
 }

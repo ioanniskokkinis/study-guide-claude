@@ -28,11 +28,17 @@ import { prisma } from "@/lib/db/prisma";
  * and token-budget lookups elsewhere in this file must stay accurate).
  */
 const { mockParse } = vi.hoisted(() => ({ mockParse: vi.fn() }));
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: class FakeAnthropic {
+vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
+  // Real RateLimitError/APIError classes are kept (not mocked) so
+  // claude.ts's categorizeAiError() can genuinely `instanceof` them
+  // (Phase 19 §19.14) — only the client's `messages.parse` call itself is faked.
+  const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
+  class FakeAnthropic {
     messages = { parse: (...args: unknown[]) => mockParse(...args) };
-  },
-}));
+  }
+  Object.assign(FakeAnthropic, { RateLimitError: actual.default.RateLimitError, APIError: actual.default.APIError });
+  return { ...actual, default: FakeAnthropic };
+});
 vi.mock("@/lib/env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/env")>();
   return { ...actual, env: { ...actual.env, ANTHROPIC_API_KEY: "test-anthropic-api-key" } };
@@ -266,6 +272,42 @@ describe("extractStructured usage instrumentation (Phase 12 §2)", () => {
     expect(row?.success).toBe(false);
     expect(row?.inputTokens).toBe(0);
     expect(row?.outputTokens).toBe(0);
+    expect(row?.errorType).toBe("UNKNOWN");
+  });
+
+  /** Phase 19 §19.14 — a rate-limit failure must be distinguishable from any other provider error in AiUsageLog, without a second telemetry system. */
+  it("categorizes a RateLimitError from the SDK as errorType RATE_LIMIT", async () => {
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    mockParse.mockRejectedValue(new Anthropic.RateLimitError(429, {}, "Rate limited", new Headers()));
+
+    await expect(
+      extractStructured({
+        model: "fast",
+        system: "sys",
+        prompt: "prompt",
+        schema: z.object({ message: z.string() }),
+        requestType: "TEST_RATE_LIMIT",
+        userId,
+      }),
+    ).rejects.toThrow();
+
+    const row = await prisma.aiUsageLog.findFirst({ where: { userId, requestType: "TEST_RATE_LIMIT" }, orderBy: { createdAt: "desc" } });
+    expect(row?.success).toBe(false);
+    expect(row?.errorType).toBe("RATE_LIMIT");
+  });
+
+  it("logs a successful call with errorType null", async () => {
+    mockParse.mockResolvedValue({ parsed_output: { message: "ok" }, usage: { input_tokens: 1, output_tokens: 1 } });
+    await extractStructured({
+      model: "fast",
+      system: "sys",
+      prompt: "prompt",
+      schema: z.object({ message: z.string() }),
+      requestType: "TEST_SUCCESS_ERROR_TYPE",
+      userId,
+    });
+    const row = await prisma.aiUsageLog.findFirst({ where: { userId, requestType: "TEST_SUCCESS_ERROR_TYPE" }, orderBy: { createdAt: "desc" } });
+    expect(row?.errorType).toBeNull();
   });
 
   it("logs a schema-mismatch (parsed_output null) as a failure while still recording input tokens", async () => {
@@ -292,6 +334,7 @@ describe("extractStructured usage instrumentation (Phase 12 §2)", () => {
     expect(row).not.toBeNull();
     expect(row?.success).toBe(false);
     expect(row?.inputTokens).toBe(15);
+    expect(row?.errorType).toBe("VALIDATION");
   });
 
   /** Phase 17 §16 — the root cause of the "Evaluating..." hang was that no AI call anywhere had a bounded timeout. This exercises the actual AbortController wiring, not just a mocked rejection. */
@@ -322,6 +365,7 @@ describe("extractStructured usage instrumentation (Phase 12 §2)", () => {
     expect(row).not.toBeNull();
     expect(row?.success).toBe(false);
     expect(row?.inputTokens).toBe(0);
+    expect(row?.errorType).toBe("TIMEOUT");
   });
 
   it("a call that resolves well within timeoutMs is unaffected by it", async () => {

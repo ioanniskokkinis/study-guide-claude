@@ -1385,6 +1385,10 @@ model AiUsageLog {
   requestType      String
   latencyMs        Int?
   success          Boolean  @default(true)
+  /// Coarse failure category (Phase 19 §19.14) — TIMEOUT/RATE_LIMIT/VALIDATION/PROVIDER/UNKNOWN, mirroring the
+  /// error-architecture taxonomy from §19.4. Null when success is true. Lets an operator query "how many exam
+  /// grading calls failed on rate limits this week" without a second telemetry system.
+  errorType        String?
   createdAt        DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1418,6 +1422,8 @@ model TtsUsageLog {
   /// True when this request was served from TutorMessageAudio instead of calling the provider (spec §9/§20-21).
   cacheHit         Boolean  @default(false)
   success          Boolean  @default(true)
+  /// Coarse failure category (Phase 19 §19.14), same taxonomy as AiUsageLog.errorType. Null when success is true.
+  errorType        String?
   createdAt        DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
