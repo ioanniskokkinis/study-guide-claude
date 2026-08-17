@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Phase 19 §19.20 — a minimum quality gate the project should not merge
+# without: typecheck, lint, the full test suite (mostly Prisma integration
+# tests against a real database, not just unit tests), a production build,
+# and migration validation. Any job failing blocks the PR via required
+# status checks (configured in the repo's branch protection settings).
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # pgvector's own image, not vanilla postgres — the schema's init
+        # migration runs `CREATE EXTENSION vector`, which vanilla postgres
+        # doesn't ship.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: study_coach
+          POSTGRES_PASSWORD: study_coach_ci_password
+          POSTGRES_DB: study_coach
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U study_coach"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://study_coach:study_coach_ci_password@localhost:5432/study_coach?schema=public
+      DEV_USER_EMAIL: ci@studycoach.local
+      # Intentionally blank — CI never calls the real Claude/TTS APIs; every
+      # test that exercises AI call sites mocks @/lib/ai/claude or the
+      # Anthropic SDK client directly (see tests/ai/pricing-and-usage.test.ts
+      # for the pattern). A real key would let a badly-written test slip
+      # through and make a live, billed API call from CI.
+      ANTHROPIC_API_KEY: ""
+      TTS_ENABLED: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Migration validation (applies every migration to a clean database)
+        run: npx prisma migrate deploy
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Production build
+        run: npm run build
