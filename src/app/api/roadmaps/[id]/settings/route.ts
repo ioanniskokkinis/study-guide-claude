@@ -55,17 +55,24 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: "At least one of deadline, minutesPerDay, or studyDays is required." }, { status: 400 });
   }
 
-  const current = await prisma.studyRoadmap.findFirst({ where: { id, userId: user.id } });
-  if (!current) {
-    return NextResponse.json({ error: "Roadmap not found." }, { status: 404 });
-  }
-
-  const deadlineChanged = "deadline" in body && (body.deadline ? new Date(body.deadline).getTime() : null) !== (current.deadline?.getTime() ?? null);
-  const capacityChanged = (body.minutesPerDay != null && body.minutesPerDay !== current.minutesPerDay) || body.studyDays != null;
-
-  const trigger = deadlineChanged ? "DEADLINE_CHANGE" : capacityChanged ? "TIME_AVAILABILITY_CHANGE" : "MANUAL_REPLAN";
-
   try {
+    // Reads only the two fields needed to classify the replan trigger below
+    // (deadline/minutesPerDay changed vs. a plain manual replan) — the
+    // actual ownership check is enforced by replanStudyRoadmap() itself
+    // (it re-loads the full roadmap and throws RoadmapNotFoundError, mapped
+    // to 404 by errorStatus() below). This used to also hand-roll its own
+    // "if (!current) return 404" here, which meant a missing/unowned
+    // roadmap could be reported via two independently-written 404 responses
+    // instead of one — removed in favor of letting the "current == null"
+    // case fall through with a moot trigger value and let
+    // replanStudyRoadmap()'s own check produce the single, authoritative
+    // 404 (Phase 19 §19.2/§19.3).
+    const current = await prisma.studyRoadmap.findFirst({ where: { id, userId: user.id }, select: { deadline: true, minutesPerDay: true } });
+    const deadlineChanged =
+      current != null && "deadline" in body && (body.deadline ? new Date(body.deadline).getTime() : null) !== (current.deadline?.getTime() ?? null);
+    const capacityChanged = current != null && ((body.minutesPerDay != null && body.minutesPerDay !== current.minutesPerDay) || body.studyDays != null);
+    const trigger = deadlineChanged ? "DEADLINE_CHANGE" : capacityChanged ? "TIME_AVAILABILITY_CHANGE" : "MANUAL_REPLAN";
+
     const roadmap = await replanStudyRoadmap(user.id, id, {
       trigger,
       // Only set the `deadline` key at all when the request body actually included one —
