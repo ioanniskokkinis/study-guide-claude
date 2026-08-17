@@ -3,6 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { formatRelativeDays } from "@/lib/format";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { Textarea } from "@/components/ui/Input";
+import { InlineError, ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/Skeleton";
+import { StatCard } from "@/components/ui/StatCard";
 
 type Correctness = "SUCCESS" | "PARTIAL" | "FAILURE";
 type ReviewOutcomeValue = "AGAIN" | "HARD" | "GOOD" | "EASY";
@@ -80,6 +87,8 @@ type Phase =
   | "rated"
   | "summary"
   | "fatal";
+
+const CORRECTNESS_TONE: Record<Correctness, BadgeTone> = { SUCCESS: "success", PARTIAL: "warning", FAILURE: "danger" };
 
 async function parseJson(response: Response) {
   return response.json().catch(() => ({}));
@@ -365,14 +374,14 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
   }
 
   if (phase === "checking") {
-    return <p className="text-sm text-zinc-500">Loading…</p>;
+    return <LoadingState />;
   }
 
   if (phase === "fatal") {
     return (
       <div>
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-        <Link href={`/courses/${courseId}`} className="mt-4 inline-block text-sm text-zinc-500 hover:underline">
+        <ErrorState message={error ?? "Something went wrong."} />
+        <Link href={`/courses/${courseId}`} className="focus-ring mt-4 inline-block rounded text-sm text-fg-muted hover:underline">
           ← Back to course
         </Link>
       </div>
@@ -381,43 +390,38 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
 
   if (phase === "idle") {
     return (
-      <div className="rounded-lg border border-zinc-200 p-6 text-center dark:border-zinc-800">
-        <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Review</h1>
-        <p className="mt-2 text-sm text-zinc-500">Spaced review of what you&rsquo;ve already learned — {courseTitle}.</p>
+      <Card className="text-center">
+        <h1 className="text-xl font-semibold text-fg">Review</h1>
+        <p className="mt-2 text-sm text-fg-muted">Spaced review of what you&rsquo;ve already learned — {courseTitle}.</p>
         {dueState && (
-          <dl className="mt-4 grid grid-cols-2 gap-4 text-center">
-            <div>
-              <dt className="text-xs text-zinc-400">Due now</dt>
-              <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{dueState.dueCount}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-400">Overdue</dt>
-              <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{dueState.overdueCount}</dd>
-            </div>
-          </dl>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <StatCard label="Due now" value={dueState.dueCount} />
+            <StatCard label="Overdue" value={dueState.overdueCount} tone={dueState.overdueCount > 0 ? "warning" : "neutral"} />
+          </div>
         )}
-        {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
-        <button
-          type="button"
-          onClick={startSession}
-          disabled={isBusy || (dueState != null && dueState.dueCount === 0)}
-          className="mt-4 rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          {isBusy ? "Starting…" : "Start Review"}
-        </button>
-      </div>
+        {error && (
+          <div className="mt-3">
+            <InlineError message={error} />
+          </div>
+        )}
+        <div className="mt-4">
+          <Button variant="primary" size="lg" loading={isBusy} disabled={dueState != null && dueState.dueCount === 0} onClick={startSession}>
+            {isBusy ? "Starting…" : "Start Review"}
+          </Button>
+        </div>
+      </Card>
     );
   }
 
   if (phase === "nothing-due") {
     return (
-      <div className="rounded-lg border border-zinc-200 p-6 text-center dark:border-zinc-800">
-        <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Nothing due right now</h1>
-        <p className="mt-2 text-sm text-zinc-500">Come back later — reviews are scheduled based on what you&rsquo;ve already learned.</p>
-        <Link href={`/courses/${courseId}`} className="mt-4 inline-block text-sm text-zinc-500 hover:underline">
+      <Card className="text-center">
+        <h1 className="text-xl font-semibold text-fg">Nothing due right now</h1>
+        <p className="mt-2 text-sm text-fg-muted">Come back later — reviews are scheduled based on what you&rsquo;ve already learned.</p>
+        <Link href={`/courses/${courseId}`} className="focus-ring mt-4 inline-block rounded text-sm text-fg-muted hover:underline">
           ← Back to course
         </Link>
-      </div>
+      </Card>
     );
   }
 
@@ -426,56 +430,53 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
   }
 
   if (!session || !sessionQuestion) {
-    return <p className="text-sm text-zinc-500">Loading…</p>;
+    return <LoadingState />;
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between text-sm text-zinc-500">
+      <div className="flex items-center justify-between text-sm text-fg-muted">
         <span>{courseTitle}</span>
         <span>
           Reviewed {session.questionsAnswered} / {session.targetLength}
         </span>
       </div>
 
-      <div className="mt-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
+      <Card className="animate-fade-in mt-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{sessionQuestion.question.concept.name}</h2>
-          <span className="text-xs text-zinc-400">Difficulty: {sessionQuestion.question.difficulty}/5</span>
+          <h2 className="text-lg font-semibold text-fg">{sessionQuestion.question.concept.name}</h2>
+          <Badge>Difficulty {sessionQuestion.question.difficulty}/5</Badge>
         </div>
-        {sessionQuestion.reason && <p className="mt-1 text-xs text-zinc-400">{sessionQuestion.reason}</p>}
+        {sessionQuestion.reason && <p className="mt-1 text-xs text-fg-subtle">{sessionQuestion.reason}</p>}
 
-        <p className="mt-4 text-zinc-800 dark:text-zinc-200">{sessionQuestion.question.prompt}</p>
+        <p className="mt-4 text-lg leading-relaxed text-fg">{sessionQuestion.question.prompt}</p>
 
         {(phase === "question" || phase === "evaluating") && (
           <>
-            <textarea
+            <Textarea
               value={answerText}
               onChange={(e) => setAnswerText(e.target.value)}
               disabled={phase === "evaluating"}
               rows={5}
               placeholder="Your answer, from memory…"
-              className="mt-4 w-full rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700 dark:bg-transparent"
+              className="mt-4"
             />
 
             {hint && (
-              <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                💡 {hint}
-              </p>
+              <div className="mt-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-fg">💡 {hint}</div>
             )}
 
-            <div className="mt-3 flex items-center gap-2 text-sm text-zinc-500">
+            <div className="mt-3 flex items-center gap-2 text-sm text-fg-muted">
               <span>Confidence:</span>
               {[1, 2, 3, 4, 5].map((level) => (
                 <button
                   key={level}
                   type="button"
+                  aria-pressed={confidence === level}
                   disabled={phase === "evaluating"}
                   onClick={() => setConfidence(level)}
-                  className={`h-7 w-7 rounded-full border text-xs font-medium ${
-                    confidence === level
-                      ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900"
-                      : "border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                  className={`focus-ring transition-standard h-7 w-7 rounded-full text-xs font-medium disabled:opacity-50 ${
+                    confidence === level ? "bg-accent text-accent-fg" : "border border-border text-fg-muted hover:bg-surface-hover"
                   }`}
                 >
                   {level}
@@ -483,59 +484,47 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
               ))}
             </div>
 
-            {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+            {error && (
+              <div className="mt-3">
+                <InlineError message={error} />
+              </div>
+            )}
 
             <div className="mt-4 flex items-center justify-between">
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={requestHint}
-                  disabled={isBusy || phase === "evaluating"}
-                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
+                <Button variant="secondary" size="sm" onClick={requestHint} disabled={isBusy || phase === "evaluating"}>
                   Hint
-                </button>
-                <button
-                  type="button"
-                  onClick={revealAnswer}
-                  disabled={isBusy || phase === "evaluating"}
-                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
+                </Button>
+                <Button variant="ghost" size="sm" onClick={revealAnswer} disabled={isBusy || phase === "evaluating"}>
                   I don&rsquo;t know
-                </button>
+                </Button>
               </div>
-              <button
-                type="button"
-                onClick={submitAnswer}
-                disabled={phase === "evaluating" || answerText.trim().length === 0}
-                className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-              >
+              <Button variant="primary" loading={phase === "evaluating"} onClick={submitAnswer} disabled={answerText.trim().length === 0}>
                 {phase === "evaluating" ? "Evaluating…" : "Submit"}
-              </button>
+              </Button>
             </div>
           </>
         )}
 
         {(phase === "eval_timeout" || phase === "eval_error") && (
-          <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30">
-              <p className="font-medium text-amber-800 dark:text-amber-300">
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="rounded-md border border-warning-border bg-warning-bg p-3 text-sm">
+              <p className="font-medium text-warning-fg">
                 {phase === "eval_timeout" ? "We couldn't evaluate your answer in time." : "We couldn't evaluate your answer right now."}
               </p>
-              <p className="mt-1 text-amber-700 dark:text-amber-400">Your answer has been saved. Rating needs it to finish evaluating.</p>
+              <p className="mt-1 text-warning-fg/90">Your answer has been saved. Rating needs it to finish evaluating.</p>
             </div>
             <div className="mt-4 flex justify-end">
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                loading={isBusy}
                 onClick={() => {
                   setPhase("evaluating");
                   void runEvaluation(session.id, sessionQuestion.id);
                 }}
-                disabled={isBusy}
-                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
                 Retry evaluation
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -552,23 +541,18 @@ export function ReviewRunner({ courseId, courseTitle }: { courseId: string; cour
         )}
 
         {phase === "rated" && ratingResult && (
-          <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-            <p className="text-sm text-zinc-700 dark:text-zinc-300">
+          <div className="mt-4 border-t border-border pt-4">
+            <p className="text-sm text-fg">
               Next review: <span className="font-medium">{formatNextReview(ratingResult.reviewItem.nextReviewAt)}</span>
             </p>
             <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={goNext}
-                disabled={isBusy}
-                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-              >
+              <Button variant="primary" loading={isBusy} onClick={goNext}>
                 {session.questionsAnswered >= session.targetLength ? "Finish Session" : "Continue"}
-              </button>
+              </Button>
             </div>
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }
@@ -577,6 +561,15 @@ function scoreLabel(score: number | null): string {
   if (score == null) return "—";
   return `${Math.round(score * 100)}%`;
 }
+
+const OUTCOME_BUTTON_CLASSES: Record<ReviewOutcomeValue, string> = {
+  AGAIN: "border-danger-border text-danger hover:bg-danger-bg",
+  HARD: "border-warning-border text-warning hover:bg-warning-bg",
+  GOOD: "border-success-border text-success hover:bg-success-bg",
+  EASY: "border-info-border text-info hover:bg-info-bg",
+};
+
+const OUTCOME_LABEL: Record<ReviewOutcomeValue, string> = { AGAIN: "Again", HARD: "Hard", GOOD: "Good", EASY: "Easy" };
 
 function RatingView({
   answer,
@@ -596,61 +589,47 @@ function RatingView({
   const failed = answer.correctness !== "SUCCESS";
 
   return (
-    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-      <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Score: {scoreLabel(answer.score)}</p>
-      {answer.feedback && <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">{answer.feedback}</p>}
+    <div className="mt-4 border-t border-border pt-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {answer.correctness && <Badge tone={CORRECTNESS_TONE[answer.correctness]}>{answer.correctness === "SUCCESS" ? "Correct" : answer.correctness === "PARTIAL" ? "Partially correct" : "Needs review"}</Badge>}
+        <p className="text-lg font-semibold text-fg">Score: {scoreLabel(answer.score)}</p>
+      </div>
+      {answer.feedback && <p className="mt-2 text-sm text-fg">{answer.feedback}</p>}
       {answer.correctAnswer && (
         <div className="mt-3">
-          <p className="text-sm font-medium text-zinc-500">Explanation</p>
-          <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">{answer.correctAnswer}</p>
+          <p className="text-sm font-medium text-fg-muted">Explanation</p>
+          <p className="mt-1 text-sm text-fg">{answer.correctAnswer}</p>
         </div>
       )}
 
       {failed && (
         <Link
           href={`/courses/${courseId}/tutor?conceptId=${conceptId}&mode=REMEDIATION`}
-          className="mt-3 inline-block text-sm text-zinc-500 underline-offset-2 hover:underline"
+          className="focus-ring mt-3 inline-block rounded text-sm text-fg-muted underline-offset-2 hover:underline"
         >
           Struggling with this? Work through it with the AI Tutor →
         </Link>
       )}
 
-      {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-3">
+          <InlineError message={error} />
+        </div>
+      )}
 
-      <p className="mt-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">How well did you recall this?</p>
-      <div className="mt-2 flex gap-2">
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => onRate("AGAIN")}
-          className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"
-        >
-          Again
-        </button>
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => onRate("HARD")}
-          className="rounded-md border border-amber-300 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-900 dark:text-amber-400 dark:hover:bg-amber-950/30"
-        >
-          Hard
-        </button>
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => onRate("GOOD")}
-          className="rounded-md border border-emerald-300 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-900 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
-        >
-          Good
-        </button>
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => onRate("EASY")}
-          className="rounded-md border border-sky-300 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50 dark:border-sky-900 dark:text-sky-400 dark:hover:bg-sky-950/30"
-        >
-          Easy
-        </button>
+      <p className="mt-4 text-sm font-medium text-fg">How well did you recall this?</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {(["AGAIN", "HARD", "GOOD", "EASY"] as const).map((outcome) => (
+          <button
+            key={outcome}
+            type="button"
+            disabled={isBusy}
+            onClick={() => onRate(outcome)}
+            className={`focus-ring transition-standard rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-50 ${OUTCOME_BUTTON_CLASSES[outcome]}`}
+          >
+            {OUTCOME_LABEL[outcome]}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -658,54 +637,33 @@ function RatingView({
 
 function ReviewSummaryView({ summary, courseId }: { summary: ReviewSummaryDTO | null; courseId: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-      <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Review Complete</h1>
+    <Card>
+      <h1 className="text-xl font-semibold text-fg">Review Complete</h1>
       {summary ? (
         <>
-          <dl className="mt-4 grid grid-cols-5 gap-3 text-center">
-            <div>
-              <dt className="text-xs text-zinc-400">Reviewed</dt>
-              <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{summary.reviewed}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-red-500">Again</dt>
-              <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{summary.again}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-amber-500">Hard</dt>
-              <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{summary.hard}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-emerald-500">Good</dt>
-              <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{summary.good}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-sky-500">Easy</dt>
-              <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{summary.easy}</dd>
-            </div>
-          </dl>
-          <p className="mt-6 text-sm text-zinc-500">
-            Next review: <span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNextReview(summary.nextReviewAt)}</span>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <StatCard label="Reviewed" value={summary.reviewed} />
+            <StatCard label="Again" value={summary.again} tone={summary.again > 0 ? "danger" : "neutral"} />
+            <StatCard label="Hard" value={summary.hard} tone={summary.hard > 0 ? "warning" : "neutral"} />
+            <StatCard label="Good" value={summary.good} tone={summary.good > 0 ? "success" : "neutral"} />
+            <StatCard label="Easy" value={summary.easy} tone={summary.easy > 0 ? "success" : "neutral"} />
+          </div>
+          <p className="mt-6 text-sm text-fg-muted">
+            Next review: <span className="font-medium text-fg">{formatNextReview(summary.nextReviewAt)}</span>
           </p>
         </>
       ) : (
-        <p className="mt-2 text-sm text-zinc-500">Summary unavailable.</p>
+        <p className="mt-2 text-sm text-fg-muted">Summary unavailable.</p>
       )}
 
       <div className="mt-6 flex gap-3">
-        <Link
-          href={`/courses/${courseId}/review`}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          Back to reviews
+        <Link href={`/courses/${courseId}/review`}>
+          <Button variant="primary">Back to reviews</Button>
         </Link>
-        <Link
-          href={`/courses/${courseId}`}
-          className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-        >
-          Back to course
+        <Link href={`/courses/${courseId}`}>
+          <Button variant="secondary">Back to course</Button>
         </Link>
       </div>
-    </div>
+    </Card>
   );
 }

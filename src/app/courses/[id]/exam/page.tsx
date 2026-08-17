@@ -6,6 +6,10 @@ import { listExamHistory } from "@/lib/exam/exam-orchestrator";
 import { calculateReadiness } from "@/lib/exam/exam-readiness";
 import { ExamSetupForm } from "@/components/exam/ExamSetupForm";
 import { ReadinessCard } from "@/components/exam/ReadinessCard";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 export const dynamic = "force-dynamic";
 
@@ -28,32 +32,34 @@ export default async function ExamPage({ params }: PageProps) {
   const resumable = history.find((e) => e.status === "ACTIVE" || e.status === "CREATED");
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <Link href={`/courses/${course.id}`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${course.id}`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← {course.title}
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Exam</h1>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">Exam</h1>
 
       {!hasKnowledgeGraph ? (
-        <p className="mt-6 rounded-lg border border-zinc-200 p-6 text-sm text-zinc-500 dark:border-zinc-800">
-          This course doesn&rsquo;t have a knowledge graph yet.{" "}
-          <Link href={`/courses/${course.id}/knowledge`} className="underline underline-offset-2">
-            Build it
-          </Link>{" "}
-          before you can take an exam.
-        </p>
+        <div className="mt-6">
+          <EmptyState
+            icon="📚"
+            title="No knowledge graph yet"
+            description="Build the knowledge graph before you can take an exam."
+            action={
+              <Link href={`/courses/${course.id}/knowledge`} className="focus-ring rounded text-sm text-fg underline underline-offset-2">
+                Build it →
+              </Link>
+            }
+          />
+        </div>
       ) : (
         <>
           {resumable && (
-            <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
-              <p className="text-amber-900 dark:text-amber-200">You have an exam in progress.</p>
-              <Link
-                href={`/courses/${course.id}/exam/${resumable.id}`}
-                className="mt-2 inline-block underline underline-offset-2 text-amber-900 dark:text-amber-200"
-              >
+            <Card className="mt-6 border-warning-border bg-warning-bg">
+              <p className="text-sm text-warning-fg">You have an exam in progress.</p>
+              <Link href={`/courses/${course.id}/exam/${resumable.id}`} className="focus-ring mt-2 inline-block rounded text-sm text-warning-fg underline underline-offset-2">
                 Resume it →
               </Link>
-            </div>
+            </Card>
           )}
 
           {readiness && <ReadinessCard readiness={readiness} />}
@@ -63,27 +69,23 @@ export default async function ExamPage({ params }: PageProps) {
           </div>
 
           <div className="mt-10">
-            <h2 className="text-sm font-medium text-zinc-500">Exam History</h2>
+            <SectionHeader title="Exam History" />
             {history.length === 0 ? (
-              <p className="mt-2 text-sm text-zinc-500">No exams taken yet.</p>
+              <p className="mt-2 text-sm text-fg-muted">No exams taken yet.</p>
             ) : (
-              <ul className="mt-2 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+              <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
                 {history.map((e) => (
                   <li key={e.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
                     <div>
                       <Link
                         href={e.status === "GRADED" ? `/courses/${course.id}/exam/${e.id}/result` : `/courses/${course.id}/exam/${e.id}`}
-                        className="font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
+                        className="focus-ring rounded font-medium text-fg underline-offset-2 hover:underline"
                       >
                         {e.mode} {e.isRetest ? "(retest)" : ""} — {new Date(e.createdAt).toLocaleDateString()}
                       </Link>
-                      <p className="text-xs text-zinc-400">{e.status}</p>
+                      <p className="text-xs text-fg-subtle">{e.status}</p>
                     </div>
-                    {e.percentage != null && (
-                      <span className={e.passed ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
-                        {Math.round(e.percentage * 100)}%
-                      </span>
-                    )}
+                    {e.percentage != null && <Badge tone={e.passed ? "success" : "danger"}>{Math.round(e.percentage * 100)}%</Badge>}
                   </li>
                 ))}
               </ul>

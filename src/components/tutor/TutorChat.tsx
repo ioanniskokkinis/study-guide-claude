@@ -3,6 +3,10 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { renderSafeMarkdown } from "@/lib/markdown/safe-markdown";
 import { consumeTutorStream, type RawTutorMessage, type RawTutorSession } from "@/lib/tutor/client-stream";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Textarea } from "@/components/ui/Input";
+import { InlineError } from "@/components/ui/ErrorState";
 
 interface DisplayMessage {
   id: string;
@@ -62,6 +66,8 @@ const MODE_LABEL: Record<SessionInfo["mode"], string> = {
 
 const MESSAGE_TYPE_LABEL: Partial<Record<string, string>> = {
   HINT: "Hint",
+  REMEDIATION: "Remediation",
+  TEACH_BACK_PROMPT: "Teach-back",
 };
 
 /**
@@ -194,15 +200,7 @@ function useTutorAudioPlayer(enabled: boolean) {
 }
 
 /** Accessible Play/Pause/Stop control for one Tutor message (Phase 14 §7-8, §17-18). State is always conveyed in the button's text, never by icon alone. */
-function AudioControl({
-  status,
-  onToggle,
-  onStop,
-}: {
-  status: AudioStatus;
-  onToggle: () => void;
-  onStop: () => void;
-}) {
+function AudioControl({ status, onToggle, onStop }: { status: AudioStatus; onToggle: () => void; onStop: () => void }) {
   const isLoading = status === "loading";
   const isPlaying = status === "playing";
   const isPaused = status === "paused";
@@ -226,21 +224,16 @@ function AudioControl({
         onClick={onToggle}
         disabled={isLoading}
         aria-label={label}
-        className="inline-flex min-h-[32px] items-center gap-1 rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        className="focus-ring transition-standard inline-flex min-h-[32px] items-center gap-1 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-surface-hover disabled:opacity-50"
       >
         {text}
       </button>
       {(isPlaying || isPaused) && (
-        <button
-          type="button"
-          onClick={onStop}
-          aria-label="Stop Tutor response"
-          className="min-h-[32px] px-1 text-xs text-zinc-400 underline-offset-2 hover:underline"
-        >
+        <button type="button" onClick={onStop} aria-label="Stop Tutor response" className="focus-ring min-h-[32px] rounded px-1 text-xs text-fg-subtle underline-offset-2 hover:underline">
           Stop
         </button>
       )}
-      {isError && <span className="text-xs text-red-500 dark:text-red-400">Couldn&rsquo;t play audio.</span>}
+      {isError && <span className="text-xs text-danger">Couldn&rsquo;t play audio.</span>}
     </div>
   );
 }
@@ -261,20 +254,21 @@ const MessageBubble = memo(function MessageBubble({
 }) {
   const label = message.messageType ? MESSAGE_TYPE_LABEL[message.messageType] : undefined;
   const canListen = ttsEnabled && message.role === "TUTOR";
+  const isStudent = message.role === "STUDENT";
   return (
-    <div className={message.role === "STUDENT" ? "flex justify-end" : "flex justify-start"}>
+    <div className={`flex ${isStudent ? "justify-end" : "justify-start"}`}>
       <div
-        className={
-          message.role === "STUDENT"
-            ? "max-w-[80%] rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white dark:bg-zinc-50 dark:text-zinc-900"
-            : "max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
-        }
+        className={`animate-slide-up max-w-[85%] rounded-lg px-3.5 py-2.5 text-sm leading-relaxed sm:max-w-[80%] ${
+          isStudent ? "bg-accent text-accent-fg" : "border border-border bg-surface-muted text-fg"
+        }`}
       >
-        {label && <p className="mb-1 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">{label}</p>}
-        {message.role === "STUDENT" ? <p className="whitespace-pre-wrap">{message.content}</p> : renderSafeMarkdown(message.content)}
-        {canListen && (
-          <AudioControl status={audioStatus} onToggle={() => onToggleAudio(message.id)} onStop={onStopAudio} />
+        {label && (
+          <Badge tone={isStudent ? "neutral" : "info"} className={isStudent ? "mb-1.5 bg-accent-fg/15 text-accent-fg" : "mb-1.5"}>
+            {label}
+          </Badge>
         )}
+        {isStudent ? <p className="whitespace-pre-wrap">{message.content}</p> : <div className="tutor-prose">{renderSafeMarkdown(message.content)}</div>}
+        {canListen && <AudioControl status={audioStatus} onToggle={() => onToggleAudio(message.id)} onStop={onStopAudio} />}
       </div>
     </div>
   );
@@ -285,9 +279,9 @@ function StreamingBubble({ phase, kind, text }: { phase: StreamPhase; kind: Stre
   if (phase === "connecting") {
     return (
       <div className="flex justify-start">
-        <div className="max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-400 dark:bg-zinc-900 dark:text-zinc-500">
+        <div role="status" className="rounded-lg border border-border bg-surface-muted px-3.5 py-2.5 text-sm text-fg-muted">
           <span className="inline-flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400" />
+            <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-fg-subtle" />
             Tutor is thinking…
           </span>
         </div>
@@ -298,10 +292,16 @@ function StreamingBubble({ phase, kind, text }: { phase: StreamPhase; kind: Stre
   if (phase === "streaming" && text !== null) {
     return (
       <div className="flex justify-start">
-        <div className="max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-          {kind === "hint" && <p className="mb-1 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">Hint</p>}
-          {renderSafeMarkdown(text)}
-          <span className="ml-0.5 inline-block w-2 animate-pulse text-zinc-400">▌</span>
+        <div role="status" aria-live="polite" className="max-w-[85%] rounded-lg border border-border bg-surface-muted px-3.5 py-2.5 text-sm leading-relaxed text-fg sm:max-w-[80%]">
+          {kind === "hint" && (
+            <Badge tone="info" className="mb-1.5">
+              Hint
+            </Badge>
+          )}
+          <div className="tutor-prose">{renderSafeMarkdown(text)}</div>
+          <span aria-hidden="true" className="ml-0.5 inline-block w-2 animate-pulse text-fg-subtle">
+            ▌
+          </span>
         </div>
       </div>
     );
@@ -309,6 +309,14 @@ function StreamingBubble({ phase, kind, text }: { phase: StreamPhase; kind: Stre
 
   return null;
 }
+
+const QUICK_ACTIONS: Array<{ label: string; text: string }> = [
+  { label: "I don't know", text: "I don't know" },
+  { label: "Just tell me", text: "Just tell me" },
+  { label: "Explain differently", text: "Can you explain that differently?" },
+  { label: "Give an example", text: "Can you give me an example?" },
+  { label: "Test me", text: "Test me on this." },
+];
 
 export function TutorChat({
   courseId,
@@ -551,33 +559,36 @@ export function TutorChat({
   }
 
   if (load.status === "loading") {
-    return <p className="text-sm text-zinc-500">Starting the tutor…</p>;
+    return (
+      <p role="status" className="flex items-center gap-2 text-sm text-fg-muted">
+        <span aria-hidden="true" className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+        Starting the tutor…
+      </p>
+    );
   }
 
   if (load.status === "error") {
-    return <p className="text-sm text-red-600 dark:text-red-400">{load.message}</p>;
+    return <InlineError message={load.message} />;
   }
 
   const { session, messages } = load;
   const isComplete = session.status === "COMPLETED";
 
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
-      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-        <div>
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Topic: {conceptName}</p>
-          <p className="text-xs text-zinc-500">
-            {MODE_LABEL[session.mode]} · Mastery: {Math.round(initialMastery * 100)}% · Difficulty {session.difficulty}/5
-          </p>
+    <div className="animate-fade-in flex h-[calc(100vh-13rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-fg">{conceptName}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <Badge tone="neutral">{MODE_LABEL[session.mode]}</Badge>
+            <span className="text-xs text-fg-muted">Mastery {Math.round(initialMastery * 100)}%</span>
+            <span className="text-xs text-fg-muted">· Difficulty {session.difficulty}/5</span>
+          </div>
         </div>
-        {isComplete && (
-          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
-            Complete
-          </span>
-        )}
+        {isComplete && <Badge tone="success">Complete</Badge>}
       </div>
 
-      <div ref={scrollContainerRef} onScroll={handleScroll} className="max-h-96 space-y-3 overflow-y-auto px-4 py-4">
+      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.map((m) => (
           <MessageBubble
             key={m.id}
@@ -593,29 +604,24 @@ export function TutorChat({
       </div>
 
       {sendError && (
-        <div className="flex items-center gap-3 px-4">
-          <p className="text-sm text-red-600 dark:text-red-400">{sendError}</p>
+        <div className="flex items-center gap-3 border-t border-border px-4 py-2">
+          <InlineError message={sendError} />
           {lastAction && (
-            <button
-              type="button"
-              onClick={retry}
-              disabled={sending}
-              className="text-sm text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
+            <Button variant="ghost" size="sm" disabled={sending} onClick={retry}>
               Retry
-            </button>
+            </Button>
           )}
         </div>
       )}
 
       {isComplete ? (
-        <div className="border-t border-zinc-200 px-4 py-4 text-sm text-zinc-500 dark:border-zinc-800">
+        <div className="border-t border-border px-4 py-4 text-sm text-fg-muted">
           You&rsquo;ve shown solid, independent understanding of {conceptName}. This conversation is finished.
         </div>
       ) : (
-        <div className="border-t border-zinc-200 px-4 py-4 dark:border-zinc-800">
-          <div className="flex gap-2">
-            <textarea
+        <div className="border-t border-border px-4 py-3.5">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -627,106 +633,51 @@ export function TutorChat({
               disabled={sending}
               rows={2}
               placeholder="Type your answer…"
-              className="flex-1 resize-none rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950"
+              aria-label="Your response to the tutor"
+              className="flex-1"
             />
             {sending ? (
-              <button
-                type="button"
-                onClick={cancelGeneration}
-                className="self-end rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-              >
+              <Button variant="secondary" onClick={cancelGeneration} className="sm:self-end">
                 Stop
-              </button>
+              </Button>
             ) : (
-              <button
-                type="button"
-                onClick={() => void send(input)}
-                disabled={input.trim().length === 0}
-                className="self-end rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-              >
+              <Button variant="primary" disabled={input.trim().length === 0} onClick={() => void send(input)} className="sm:self-end">
                 Send
-              </button>
+              </Button>
             )}
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-zinc-400">How sure are you?</span>
+            <span className="text-xs text-fg-muted">How sure are you?</span>
             {(["CONFIDENT", "UNSURE", "GUESSING"] as const).map((level) => (
               <button
                 key={level}
                 type="button"
                 onClick={() => setConfidence((c) => (c === level ? null : level))}
                 disabled={sending}
-                className={
-                  confidence === level
-                    ? "rounded-full bg-zinc-900 px-2.5 py-1 text-xs text-white dark:bg-zinc-50 dark:text-zinc-900"
-                    : "rounded-full border border-zinc-300 px-2.5 py-1 text-xs text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                }
+                aria-pressed={confidence === level}
+                className={`focus-ring transition-standard rounded-full px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
+                  confidence === level ? "bg-accent text-accent-fg" : "border border-border text-fg-muted hover:bg-surface-hover"
+                }`}
               >
                 {level === "CONFIDENT" ? "Confident" : level === "UNSURE" ? "Unsure" : "Guessing"}
               </button>
             ))}
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-3 text-sm">
-            <button
-              type="button"
-              onClick={() => void requestHint()}
-              disabled={sending}
-              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              Hint
-            </button>
-            <button
-              type="button"
-              onClick={() => void send("I don't know")}
-              disabled={sending}
-              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              I don&rsquo;t know
-            </button>
-            <button
-              type="button"
-              onClick={() => void send("Just tell me")}
-              disabled={sending}
-              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              Just tell me
-            </button>
-            {/* Reuse the same free-text send() pipeline as every other quick action here — no new backend, the Tutor already handles open-ended requests like these in every mode (Phase 2 §O). */}
-            <button
-              type="button"
-              onClick={() => void send("Can you explain that differently?")}
-              disabled={sending}
-              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              Explain differently
-            </button>
-            <button
-              type="button"
-              onClick={() => void send("Can you give me an example?")}
-              disabled={sending}
-              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              Give an example
-            </button>
-            <button
-              type="button"
-              onClick={() => void send("Test me on this.")}
-              disabled={sending}
-              className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              Test me
-            </button>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <Button variant="ghost" size="sm" disabled={sending} onClick={() => void requestHint()}>
+              💡 Hint
+            </Button>
+            {QUICK_ACTIONS.map((action) => (
+              <Button key={action.label} variant="ghost" size="sm" disabled={sending} onClick={() => void send(action.text)}>
+                {action.label}
+              </Button>
+            ))}
             {session.mode !== "TEACH_BACK" && (
-              <button
-                type="button"
-                onClick={() => void postAction(`/api/tutor/sessions/${session.id}/teach-back`)}
-                disabled={sending}
-                className="text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-              >
+              <Button variant="ghost" size="sm" disabled={sending} onClick={() => void postAction(`/api/tutor/sessions/${session.id}/teach-back`)}>
                 Explain it back to me
-              </button>
+              </Button>
             )}
           </div>
         </div>

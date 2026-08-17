@@ -5,6 +5,9 @@ import { findOwnedCourse, getCourseWithDocuments } from "@/lib/services/courses"
 import { listFolders } from "@/lib/services/folders";
 import { listRoadmaps } from "@/lib/advisor/queries";
 import { StudyAdvisorForm } from "@/components/advisor/StudyAdvisorForm";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Badge } from "@/components/ui/Badge";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 export const dynamic = "force-dynamic";
 
@@ -39,23 +42,28 @@ export default async function AdvisorPage({ params }: PageProps) {
   const readyDocuments = (courseWithDocuments?.documents ?? []).filter((d) => d.processingStatus === "READY");
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <Link href={`/courses/${courseId}`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${courseId}`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← {course.title}
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Study Advisor</h1>
-      <p className="mt-1 text-sm text-zinc-500">
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">Study Advisor</h1>
+      <p className="mt-1 text-sm text-fg-muted">
         Tell it your goal, deadline, and available time — it builds a personalized roadmap from your actual knowledge
         state and study material.
       </p>
 
       {readyDocuments.length === 0 ? (
-        <div className="mt-8 rounded-lg border border-zinc-200 p-6 text-sm text-zinc-500 dark:border-zinc-800">
-          You don&rsquo;t have any processed study material yet.{" "}
-          <Link href={`/courses/${courseId}`} className="underline underline-offset-2">
-            Upload documents
-          </Link>{" "}
-          before building a roadmap.
+        <div className="mt-8">
+          <EmptyState
+            icon="🗺️"
+            title="No processed study material yet"
+            description="Upload documents before building a roadmap."
+            action={
+              <Link href={`/courses/${courseId}`} className="focus-ring rounded text-sm text-fg underline underline-offset-2">
+                Upload documents
+              </Link>
+            }
+          />
         </div>
       ) : (
         <div className="mt-8">
@@ -65,15 +73,15 @@ export default async function AdvisorPage({ params }: PageProps) {
 
       {roadmaps && roadmaps.length > 0 && (
         <div className="mt-10">
-          <h2 className="text-sm font-medium text-zinc-500">Previous roadmaps</h2>
-          <ul className="mt-2 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          <SectionHeader title="Previous roadmaps" />
+          <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
             {roadmaps.map((r) => (
               <li key={r.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
-                <Link href={`/courses/${courseId}/advisor/${r.id}`} className="min-w-0 truncate font-medium text-zinc-900 hover:underline dark:text-zinc-50">
+                <Link href={`/courses/${courseId}/advisor/${r.id}`} className="focus-ring min-w-0 truncate rounded font-medium text-fg hover:underline">
                   {r.title}
                 </Link>
-                <span className="shrink-0 text-xs text-zinc-400">
-                  {r.status} · v{r.version}
+                <span className="flex shrink-0 items-center gap-2 text-xs text-fg-subtle">
+                  <Badge>{r.status}</Badge>v{r.version}
                 </span>
               </li>
             ))}

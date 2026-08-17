@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { Textarea } from "@/components/ui/Input";
+import { InlineError } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/Skeleton";
+import { StatCard } from "@/components/ui/StatCard";
 
 type Correctness = "SUCCESS" | "PARTIAL" | "FAILURE";
 type EvaluationStatus = "PENDING" | "COMPLETED" | "FAILED" | "TIMEOUT";
@@ -367,14 +375,14 @@ export function RecallSession({ courseId, courseTitle }: { courseId: string; cou
   }
 
   if (phase === "checking") {
-    return <p className="text-sm text-zinc-500">Loading…</p>;
+    return <LoadingState label="Loading Active Recall" />;
   }
 
   if (phase === "fatal") {
     return (
-      <div>
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-        <Link href={`/courses/${courseId}`} className="mt-4 inline-block text-sm text-zinc-500 hover:underline">
+      <div className="animate-fade-in">
+        <InlineError message={error ?? "Something went wrong."} />
+        <Link href={`/courses/${courseId}`} className="focus-ring mt-4 inline-block text-sm text-fg-muted hover:text-fg hover:underline">
           ← Back to course
         </Link>
       </div>
@@ -383,21 +391,20 @@ export function RecallSession({ courseId, courseTitle }: { courseId: string; cou
 
   if (phase === "idle") {
     return (
-      <div className="rounded-lg border border-zinc-200 p-6 text-center dark:border-zinc-800">
-        <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Active Recall</h1>
-        <p className="mt-2 text-sm text-zinc-500">
-          Answer questions from memory before seeing the explanation — {courseTitle}.
-        </p>
-        {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
-        <button
-          type="button"
-          onClick={startSession}
-          disabled={isBusy}
-          className="mt-4 rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-70 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          {isBusy ? "Starting…" : "Start Active Recall"}
-        </button>
-      </div>
+      <Card padding="lg" className="animate-fade-in text-center">
+        <h1 className="text-xl font-semibold text-fg">Active Recall</h1>
+        <p className="mt-2 text-sm text-fg-muted">Answer questions from memory before seeing the explanation — {courseTitle}.</p>
+        {error && (
+          <div className="mt-3">
+            <InlineError message={error} />
+          </div>
+        )}
+        <div className="mt-5">
+          <Button variant="primary" size="lg" loading={isBusy} onClick={startSession}>
+            {isBusy ? "Starting…" : "Start Active Recall"}
+          </Button>
+        </div>
+      </Card>
     );
   }
 
@@ -406,99 +413,104 @@ export function RecallSession({ courseId, courseTitle }: { courseId: string; cou
   }
 
   if (!session || !sessionQuestion) {
-    return <p className="text-sm text-zinc-500">Loading…</p>;
+    return <LoadingState />;
   }
 
   const isAnswering = phase === "question" || phase === "submitting";
+  const questionNumber = session.questionsAnswered + (isAnswering ? 1 : 0);
 
   return (
-    <div>
-      <div className="flex items-center justify-between text-sm text-zinc-500">
-        <span>{courseTitle}</span>
+    <div className="animate-fade-in">
+      <div className="flex items-center justify-between gap-4 text-sm text-fg-muted">
+        <span className="font-medium text-fg">{courseTitle}</span>
         <span>
-          Question {session.questionsAnswered + (isAnswering ? 1 : 0)} / {session.targetLength}
+          Question {questionNumber} / {session.targetLength}
         </span>
       </div>
+      <ProgressBar
+        value={(questionNumber - 1) / session.targetLength}
+        className="mt-2"
+        label={`Question ${questionNumber} of ${session.targetLength}`}
+      />
 
-      <div className="mt-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{sessionQuestion.question.concept.name}</h2>
-          <span className="text-xs text-zinc-400">Difficulty: {sessionQuestion.question.difficulty}/5</span>
+      {/* The question is the dominant visual element (spec 18.5) — larger type, generous spacing, everything else recedes below it. */}
+      <Card padding="lg" className="animate-slide-up mt-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-fg">{sessionQuestion.question.concept.name}</h2>
+          <Badge tone="neutral">Difficulty {sessionQuestion.question.difficulty}/5</Badge>
         </div>
         {sessionQuestion.reason && (
-          <details className="mt-1">
-            <summary className="cursor-pointer text-xs text-zinc-400">Why this question?</summary>
-            <p className="mt-1 text-xs text-zinc-500">{sessionQuestion.reason}</p>
+          <details className="mt-1.5">
+            <summary className="focus-ring cursor-pointer text-xs text-fg-subtle">Why this question?</summary>
+            <p className="mt-1 text-xs text-fg-muted">{sessionQuestion.reason}</p>
           </details>
         )}
 
-        <p className="mt-4 text-zinc-800 dark:text-zinc-200">{sessionQuestion.question.prompt}</p>
+        <p className="mt-5 text-lg leading-relaxed text-fg">{sessionQuestion.question.prompt}</p>
 
         {isAnswering && (
           <>
-            <textarea
+            <Textarea
               value={answerText}
               onChange={(e) => setAnswerText(e.target.value)}
               disabled={phase === "submitting"}
               rows={5}
               placeholder="Your answer…"
-              className="mt-4 w-full rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700 dark:bg-transparent"
+              aria-label="Your answer"
+              className="mt-5 text-base"
             />
 
             {hint && (
-              <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+              <div className="animate-slide-up mt-3 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-fg">
                 💡 {hint}
-              </p>
+              </div>
             )}
 
-            <div className="mt-3 flex items-center gap-2 text-sm text-zinc-500">
+            <div className="mt-4 flex items-center gap-2 text-sm text-fg-muted">
               <span>Confidence:</span>
-              {[1, 2, 3, 4, 5].map((level) => (
-                <button
-                  key={level}
-                  type="button"
-                  disabled={phase === "submitting"}
-                  onClick={() => setConfidence((c) => (c === level ? null : level))}
-                  className={`h-7 w-7 rounded-full border text-xs font-medium ${
-                    confidence === level
-                      ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900"
-                      : "border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
-                  }`}
-                >
-                  {level}
-                </button>
-              ))}
+              <div className="flex gap-1.5">
+                {[1, 2, 3, 4, 5].map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    disabled={phase === "submitting"}
+                    onClick={() => setConfidence((c) => (c === level ? null : level))}
+                    aria-pressed={confidence === level}
+                    aria-label={`Confidence ${level} out of 5`}
+                    className={`focus-ring transition-standard h-7 w-7 rounded-full border text-xs font-medium ${
+                      confidence === level ? "border-accent bg-accent text-accent-fg" : "border-border text-fg-muted hover:bg-surface-hover"
+                    }`}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
-
-            <div className="mt-4 flex items-center justify-between">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={requestHint}
-                  disabled={isBusy || phase === "submitting"}
-                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
-                  Hint
-                </button>
-                <button
-                  type="button"
-                  onClick={revealAnswer}
-                  disabled={isBusy || phase === "submitting"}
-                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
-                  Reveal Answer
-                </button>
+            {error && (
+              <div className="mt-3">
+                <InlineError message={error} />
               </div>
-              <button
-                type="button"
+            )}
+
+            <div className="mt-5 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" disabled={isBusy || phase === "submitting"} onClick={requestHint}>
+                  Hint
+                </Button>
+                <Button variant="ghost" size="sm" disabled={isBusy || phase === "submitting"} onClick={revealAnswer}>
+                  Reveal Answer
+                </Button>
+              </div>
+              <Button
+                variant="primary"
+                size="lg"
+                loading={phase === "submitting"}
+                disabled={answerText.trim().length === 0}
                 onClick={() => void submitAnswer()}
-                disabled={phase === "submitting" || answerText.trim().length === 0}
-                className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
                 {phase === "submitting" ? "Saving…" : "Submit"}
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -535,7 +547,7 @@ export function RecallSession({ courseId, courseTitle }: { courseId: string; cou
             isLastQuestion={session.questionsAnswered >= session.targetLength}
           />
         )}
-      </div>
+      </Card>
     </div>
   );
 }
@@ -548,27 +560,27 @@ function scoreLabel(score: number | null): string {
 /** Shown the instant an answer is submitted (Phase 17 §12): the student's own answer and the model answer, both already persisted — never waiting on Claude to appear. */
 function EvaluatingView({ answerText, modelAnswer, rubric }: { answerText: string; modelAnswer: string | null; rubric: string[] }) {
   return (
-    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">Your answer</p>
-      <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">{answerText}</p>
+    <div className="animate-slide-up mt-5 border-t border-border pt-5">
+      <p className="text-xs font-medium tracking-wide text-fg-subtle uppercase">Your answer</p>
+      <p className="mt-1 text-sm whitespace-pre-wrap text-fg">{answerText}</p>
 
       {modelAnswer && (
         <div className="mt-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">Model answer</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">{modelAnswer}</p>
+          <p className="text-xs font-medium tracking-wide text-fg-subtle uppercase">Model answer</p>
+          <p className="mt-1 text-sm whitespace-pre-wrap text-fg">{modelAnswer}</p>
         </div>
       )}
 
       {rubric.length > 0 && (
-        <ul className="mt-2 list-inside list-disc text-xs text-zinc-500">
+        <ul className="mt-2 list-inside list-disc text-xs text-fg-muted">
           {rubric.map((point, i) => (
             <li key={i}>{point}</li>
           ))}
         </ul>
       )}
 
-      <p className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-zinc-400" />
+      <p role="status" className="mt-4 flex items-center gap-2 text-sm text-fg-muted">
+        <span aria-hidden="true" className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
         Evaluating your answer…
       </p>
     </div>
@@ -592,45 +604,38 @@ function EvalFailureView({
   onContinue: () => void;
 }) {
   return (
-    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">Your answer</p>
-      <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">{answerText}</p>
+    <div className="animate-slide-up mt-5 border-t border-border pt-5">
+      <p className="text-xs font-medium tracking-wide text-fg-subtle uppercase">Your answer</p>
+      <p className="mt-1 text-sm whitespace-pre-wrap text-fg">{answerText}</p>
 
       {modelAnswer && (
         <div className="mt-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">Model answer</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">{modelAnswer}</p>
+          <p className="text-xs font-medium tracking-wide text-fg-subtle uppercase">Model answer</p>
+          <p className="mt-1 text-sm whitespace-pre-wrap text-fg">{modelAnswer}</p>
         </div>
       )}
 
-      <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30">
-        <p className="font-medium text-amber-800 dark:text-amber-300">
+      <div role="alert" className="mt-4 rounded-md border border-warning-border bg-warning-bg p-3 text-sm">
+        <p className="font-medium text-warning-fg">
           {timedOut ? "We couldn't evaluate your answer in time." : "We couldn't evaluate your answer right now."}
         </p>
-        <p className="mt-1 text-amber-700 dark:text-amber-400">Your answer has been saved. The model answer is shown above.</p>
+        <p className="mt-1 text-warning-fg/90">Your answer has been saved. The model answer is shown above.</p>
       </div>
 
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onContinue}
-          disabled={isBusy}
-          className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-        >
+      <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <Button variant="secondary" disabled={isBusy} onClick={onContinue}>
           Continue
-        </button>
-        <button
-          type="button"
-          onClick={onRetry}
-          disabled={isBusy}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
+        </Button>
+        <Button variant="primary" disabled={isBusy} onClick={onRetry}>
           Retry evaluation
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
+
+const CORRECTNESS_LABEL: Record<Correctness, string> = { SUCCESS: "Correct", PARTIAL: "Partially correct", FAILURE: "Needs review" };
+const CORRECTNESS_TONE: Record<Correctness, BadgeTone> = { SUCCESS: "success", PARTIAL: "warning", FAILURE: "danger" };
 
 function FeedbackView({
   answer,
@@ -650,13 +655,16 @@ function FeedbackView({
   const allowRetry = !answer.revealedAnswer && answer.correctness !== "SUCCESS";
 
   return (
-    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-      <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Score: {scoreLabel(answer.score)}</p>
+    <div className="animate-slide-up mt-5 border-t border-border pt-5">
+      <div className="flex items-center gap-3">
+        {answer.correctness && <Badge tone={CORRECTNESS_TONE[answer.correctness]}>{CORRECTNESS_LABEL[answer.correctness]}</Badge>}
+        <p className="text-lg font-semibold text-fg">Score: {scoreLabel(answer.score)}</p>
+      </div>
 
       {answer.strengths && answer.strengths.length > 0 && (
         <div className="mt-3">
-          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">✓ What you got right</p>
-          <ul className="mt-1 list-inside list-disc text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm font-medium text-success">✓ What you got right</p>
+          <ul className="mt-1 list-inside list-disc text-sm text-fg-muted">
             {answer.strengths.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
@@ -666,8 +674,8 @@ function FeedbackView({
 
       {answer.missingPoints && answer.missingPoints.length > 0 && (
         <div className="mt-3">
-          <p className="text-sm font-medium text-amber-700 dark:text-amber-400">⚠ What is missing</p>
-          <ul className="mt-1 list-inside list-disc text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm font-medium text-warning">⚠ What is missing</p>
+          <ul className="mt-1 list-inside list-disc text-sm text-fg-muted">
             {answer.missingPoints.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
@@ -677,8 +685,8 @@ function FeedbackView({
 
       {((answer.errors && answer.errors.length > 0) || (answer.misconceptions && answer.misconceptions.length > 0)) && (
         <div className="mt-3">
-          <p className="text-sm font-medium text-red-700 dark:text-red-400">❌ What needs correction</p>
-          <ul className="mt-1 list-inside list-disc text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm font-medium text-danger">✕ What needs correction</p>
+          <ul className="mt-1 list-inside list-disc text-sm text-fg-muted">
             {answer.errors?.map((e, i) => (
               <li key={`e-${i}`}>{e.description}</li>
             ))}
@@ -689,34 +697,24 @@ function FeedbackView({
         </div>
       )}
 
-      {answer.feedback && <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">{answer.feedback}</p>}
+      {answer.feedback && <p className="mt-3 text-sm text-fg">{answer.feedback}</p>}
 
       {answer.correctAnswer && (
         <div className="mt-3">
-          <p className="text-sm font-medium text-zinc-500">Explanation</p>
-          <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">{answer.correctAnswer}</p>
+          <p className="text-sm font-medium text-fg-muted">Explanation</p>
+          <p className="mt-1 text-sm text-fg">{answer.correctAnswer}</p>
         </div>
       )}
 
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         {allowRetry && (
-          <button
-            type="button"
-            onClick={onTryAgain}
-            disabled={isBusy}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-          >
+          <Button variant="secondary" disabled={isBusy} onClick={onTryAgain}>
             Try Again
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          onClick={isLastQuestion ? onFinish : onNext}
-          disabled={isBusy}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
+        <Button variant="primary" size="lg" loading={isBusy} onClick={isLastQuestion ? onFinish : onNext}>
           {isLastQuestion ? "Finish Session" : "Next Question"}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -724,66 +722,45 @@ function FeedbackView({
 
 function SessionSummaryView({ summary, courseId }: { summary: SummaryDTO | null; courseId: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-      <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Session Complete</h1>
+    <Card padding="lg" className="animate-fade-in">
+      <h1 className="text-xl font-semibold text-fg">Session Complete</h1>
       {summary ? (
         <>
-          <dl className="mt-4 grid grid-cols-3 gap-4 text-center">
-            <div>
-              <dt className="text-xs text-zinc-400">Questions</dt>
-              <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{summary.questionsAnswered}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-400">Correct</dt>
-              <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{summary.questionsCorrect}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-400">Average score</dt>
-              <dd className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-                {Math.round(summary.averageScore * 100)}%
-              </dd>
-            </div>
-          </dl>
+          <div className="mt-4 grid grid-cols-3 gap-3">
+            <StatCard label="Questions" value={summary.questionsAnswered} />
+            <StatCard label="Correct" value={summary.questionsCorrect} tone="success" />
+            <StatCard label="Average score" value={`${Math.round(summary.averageScore * 100)}%`} />
+          </div>
 
           <div className="mt-6">
-            <p className="text-sm font-medium text-zinc-500">Concepts practiced</p>
-            <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">
-              {summary.conceptsPracticed.length > 0 ? summary.conceptsPracticed.join(", ") : "None"}
-            </p>
+            <p className="text-sm font-medium text-fg-muted">Concepts practiced</p>
+            <p className="mt-1 text-sm text-fg">{summary.conceptsPracticed.length > 0 ? summary.conceptsPracticed.join(", ") : "None"}</p>
           </div>
 
           <div className="mt-4">
-            <p className="text-sm font-medium text-zinc-500">Current weak areas</p>
-            <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">
-              {summary.weakAreas.length > 0 ? summary.weakAreas.join(", ") : "None right now."}
-            </p>
+            <p className="text-sm font-medium text-fg-muted">Current weak areas</p>
+            <p className="mt-1 text-sm text-fg">{summary.weakAreas.length > 0 ? summary.weakAreas.join(", ") : "None right now."}</p>
           </div>
 
           {summary.mistakeCount > 0 && (
-            <p className="mt-4 text-sm text-zinc-500">
-              {summary.mistakeCount} mistake{summary.mistakeCount === 1 ? "" : "s"} recorded this session — review them
-              from the course knowledge page.
+            <p className="mt-4 text-sm text-fg-muted">
+              {summary.mistakeCount} mistake{summary.mistakeCount === 1 ? "" : "s"} recorded this session — review them from the course
+              knowledge page.
             </p>
           )}
         </>
       ) : (
-        <p className="mt-2 text-sm text-zinc-500">Summary unavailable.</p>
+        <p className="mt-2 text-sm text-fg-muted">Summary unavailable.</p>
       )}
 
-      <div className="mt-6 flex gap-3">
-        <Link
-          href={`/courses/${courseId}/study/recall`}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          Start another session
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+        <Link href={`/courses/${courseId}/study/recall`}>
+          <Button variant="primary">Start another session</Button>
         </Link>
-        <Link
-          href={`/courses/${courseId}`}
-          className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-        >
-          Back to course
+        <Link href={`/courses/${courseId}`}>
+          <Button variant="secondary">Back to course</Button>
         </Link>
       </div>
-    </div>
+    </Card>
   );
 }

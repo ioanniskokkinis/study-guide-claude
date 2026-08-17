@@ -2,6 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { InlineError } from "@/components/ui/ErrorState";
 
 interface ConceptScore {
   name: string;
@@ -72,6 +77,12 @@ const CLASSIFICATION_LABEL: Record<string, string> = {
   UNANSWERED: "Unanswered",
 };
 
+function scoreTone(score: number): "success" | "warning" | "danger" {
+  if (score >= 0.75) return "success";
+  if (score >= 0.5) return "warning";
+  return "danger";
+}
+
 /** Post-exam analysis (spec §37-39, §43, §63) — full feedback, only shown after submission. */
 export function ExamResultView({ courseId, result }: { courseId: string; result: ExamResultDTO }) {
   const router = useRouter();
@@ -102,88 +113,84 @@ export function ExamResultView({ courseId, result }: { courseId: string; result:
   const incorrectQuestions = result.questions.filter((q) => q.classification && q.classification !== "CORRECT");
 
   return (
-    <div className="mt-6">
-      <div className="rounded-lg border border-zinc-200 p-6 text-center dark:border-zinc-800">
-        <p className="text-4xl font-semibold text-zinc-900 dark:text-zinc-50">{Math.round(result.percentage * 100)}%</p>
-        <p className={result.passed ? "mt-1 text-sm text-emerald-600 dark:text-emerald-400" : "mt-1 text-sm text-red-600 dark:text-red-400"}>
-          {result.passed ? "Passed" : "Not passed"}
-        </p>
-        <p className="mt-3 text-sm text-zinc-500">
+    <div className="mt-6 space-y-6">
+      <Card className="text-center">
+        <p className="text-4xl font-semibold text-fg">{Math.round(result.percentage * 100)}%</p>
+        <div className="mt-1">
+          <Badge tone={result.passed ? "success" : "danger"}>{result.passed ? "Passed" : "Not passed"}</Badge>
+        </div>
+        <p className="mt-3 text-sm text-fg-muted">
           {result.correctAnswers} correct · {result.partialAnswers} partial · {result.incorrectAnswers} incorrect · {result.unanswered} unanswered ·{" "}
           {formatMinutes(result.timeSpentSeconds)}
         </p>
-      </div>
+      </Card>
 
-      <div className="mt-6 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-        <h2 className="text-xs font-medium tracking-wide text-zinc-400 uppercase">Concept Scores</h2>
-        <ul className="mt-3 space-y-2">
+      <Card>
+        <h2 className="text-xs font-medium tracking-wide text-fg-muted uppercase">Concept Scores</h2>
+        <ul className="mt-3 space-y-2.5">
           {Object.entries(result.conceptScores)
             .sort((a, b) => a[1].score - b[1].score)
             .map(([id, c]) => (
               <li key={id} className="flex items-center gap-3 text-sm">
-                <span className="w-32 shrink-0 truncate text-zinc-700 dark:text-zinc-300">{c.name}</span>
-                <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
-                  <div
-                    className={c.score >= 0.75 ? "h-full bg-emerald-500" : c.score >= 0.5 ? "h-full bg-amber-500" : "h-full bg-red-500"}
-                    style={{ width: `${Math.round(c.score * 100)}%` }}
-                  />
-                </div>
-                <span className="w-10 shrink-0 text-right text-zinc-500">{Math.round(c.score * 100)}%</span>
+                <span className="w-32 shrink-0 truncate text-fg">{c.name}</span>
+                <ProgressBar value={c.score} tone={scoreTone(c.score)} className="flex-1" />
+                <span className="w-10 shrink-0 text-right text-fg-muted">{Math.round(c.score * 100)}%</span>
               </li>
             ))}
         </ul>
-      </div>
+      </Card>
 
-      <div className="mt-6 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-        <h2 className="text-xs font-medium tracking-wide text-zinc-400 uppercase">Cognitive Scores</h2>
+      <Card>
+        <h2 className="text-xs font-medium tracking-wide text-fg-muted uppercase">Cognitive Scores</h2>
         <ul className="mt-3 space-y-2">
           {Object.entries(result.cognitiveScores)
             .filter(([, score]) => score > 0)
             .map(([level, score]) => (
               <li key={level} className="flex items-center justify-between text-sm">
-                <span className="text-zinc-700 dark:text-zinc-300">{level}</span>
-                <span className="text-zinc-500">{Math.round(score * 100)}%</span>
+                <span className="text-fg">{level}</span>
+                <span className="text-fg-muted">{Math.round(score * 100)}%</span>
               </li>
             ))}
         </ul>
-      </div>
+      </Card>
 
-      <div className="mt-6 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-        <h2 className="text-xs font-medium tracking-wide text-zinc-400 uppercase">Recommended Next Step</h2>
-        <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">{result.nextAction.reason}</p>
+      <Card>
+        <h2 className="text-xs font-medium tracking-wide text-fg-muted uppercase">Recommended Next Step</h2>
+        <p className="mt-2 text-sm text-fg">{result.nextAction.reason}</p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => void startRetest()}
-            disabled={retesting}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
+          <Button variant="primary" loading={retesting} onClick={() => void startRetest()}>
             {retesting ? "Preparing…" : "Retest Weak Areas"}
-          </button>
-          <a href={`/courses/${courseId}/tutor`} className="rounded-md border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">
-            Study with the Tutor
+          </Button>
+          <a href={`/courses/${courseId}/tutor`}>
+            <Button variant="secondary">Study with the Tutor</Button>
           </a>
         </div>
-        {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
-      </div>
+        {error && (
+          <div className="mt-3">
+            <InlineError message={error} />
+          </div>
+        )}
+      </Card>
 
       {incorrectQuestions.length > 0 && (
-        <div className="mt-6">
-          <h2 className="text-sm font-medium text-zinc-500">Review</h2>
+        <div>
+          <h2 className="text-sm font-medium text-fg-muted">Review</h2>
           <ul className="mt-2 space-y-3">
             {incorrectQuestions.map((q) => (
-              <li key={q.questionId} className="rounded-lg border border-zinc-200 p-4 text-sm dark:border-zinc-800">
-                <p className="text-xs font-medium text-zinc-400 uppercase">
-                  {q.conceptName} · {q.classification ? CLASSIFICATION_LABEL[q.classification] : ""}
-                </p>
-                <p className="mt-1 text-zinc-700 dark:text-zinc-300">{q.prompt}</p>
-                {q.feedback && <p className="mt-2 text-zinc-500">{q.feedback}</p>}
-                {q.missingConcepts.length > 0 && <p className="mt-1 text-zinc-500">Missing: {q.missingConcepts.join(", ")}</p>}
-                {q.expectedAnswer && (
-                  <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-                    <span className="font-medium">Reference:</span> {q.expectedAnswer}
+              <li key={q.questionId}>
+                <Card padding="sm">
+                  <p className="text-xs font-medium text-fg-subtle uppercase">
+                    {q.conceptName} · {q.classification ? CLASSIFICATION_LABEL[q.classification] : ""}
                   </p>
-                )}
+                  <p className="mt-1 text-sm text-fg">{q.prompt}</p>
+                  {q.feedback && <p className="mt-2 text-sm text-fg-muted">{q.feedback}</p>}
+                  {q.missingConcepts.length > 0 && <p className="mt-1 text-sm text-fg-muted">Missing: {q.missingConcepts.join(", ")}</p>}
+                  {q.expectedAnswer && (
+                    <p className="mt-2 text-sm text-fg-muted">
+                      <span className="font-medium text-fg">Reference:</span> {q.expectedAnswer}
+                    </p>
+                  )}
+                </Card>
               </li>
             ))}
           </ul>

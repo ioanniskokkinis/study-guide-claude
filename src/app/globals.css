@@ -1,26 +1,348 @@
 @import "tailwindcss";
 
+/**
+ * Design tokens (Phase 18.1). Every color is a deliberate choice for each
+ * theme — dark mode is not an automatic inversion of light mode — layered
+ * so three states are all correctly handled:
+ *   1. No explicit choice: follows the OS via prefers-color-scheme.
+ *   2. Explicit "dark": wins regardless of OS (data-theme="dark").
+ *   3. Explicit "light": wins regardless of OS (data-theme="light").
+ * See ThemeScript (src/components/ui/ThemeScript.tsx) for how data-theme
+ * gets set before hydration to avoid a flash of the wrong theme.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  --color-bg: #ffffff;
+  --color-bg-subtle: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f4f4f5;
+  --color-surface-muted: #f4f4f5;
+  --color-border: #e4e4e7;
+  --color-border-strong: #d4d4d8;
+  --color-fg: #18181b;
+  --color-fg-muted: #71717a;
+  --color-fg-subtle: #a1a1aa;
+  --color-accent: #18181b;
+  --color-accent-fg: #fafafa;
+  --color-accent-hover: #3f3f46;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-success: #059669;
+  --color-success-fg: #065f46;
+  --color-success-bg: #ecfdf5;
+  --color-success-border: #a7f3d0;
+
+  --color-warning: #d97706;
+  --color-warning-fg: #92400e;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: #fde68a;
+
+  --color-danger: #dc2626;
+  --color-danger-fg: #991b1b;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+
+  --color-info: #2563eb;
+  --color-info-fg: #1e40af;
+  --color-info-bg: #eff6ff;
+  --color-info-border: #bfdbfe;
+
+  --color-focus-ring: #18181b;
+
+  --shadow-color: 0deg 0% 0%;
+  --shadow-sm: 0 1px 2px hsl(var(--shadow-color) / 0.05);
+  --shadow-md: 0 4px 12px -2px hsl(var(--shadow-color) / 0.08), 0 2px 4px -2px hsl(var(--shadow-color) / 0.04);
+  --shadow-lg: 0 12px 32px -8px hsl(var(--shadow-color) / 0.14), 0 4px 8px -4px hsl(var(--shadow-color) / 0.06);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.25rem;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --color-bg: #09090b;
+    --color-bg-subtle: #101012;
+    --color-surface: #18181b;
+    --color-surface-hover: #202023;
+    --color-surface-muted: #1f1f22;
+    --color-border: #27272a;
+    --color-border-strong: #3f3f46;
+    --color-fg: #fafafa;
+    --color-fg-muted: #a1a1aa;
+    --color-fg-subtle: #71717a;
+    --color-accent: #fafafa;
+    --color-accent-fg: #18181b;
+    --color-accent-hover: #d4d4d8;
+
+    --color-success: #34d399;
+    --color-success-fg: #6ee7b7;
+    --color-success-bg: #052e21;
+    --color-success-border: #065f46;
+
+    --color-warning: #fbbf24;
+    --color-warning-fg: #fcd34d;
+    --color-warning-bg: #2e1c05;
+    --color-warning-border: #92400e;
+
+    --color-danger: #f87171;
+    --color-danger-fg: #fca5a5;
+    --color-danger-bg: #2c0b0b;
+    --color-danger-border: #991b1b;
+
+    --color-info: #60a5fa;
+    --color-info-fg: #93c5fd;
+    --color-info-bg: #0b1a2e;
+    --color-info-border: #1e40af;
+
+    --color-focus-ring: #fafafa;
+    --shadow-color: 0deg 0% 0%;
   }
 }
 
+:root[data-theme="dark"] {
+  --color-bg: #09090b;
+  --color-bg-subtle: #101012;
+  --color-surface: #18181b;
+  --color-surface-hover: #202023;
+  --color-surface-muted: #1f1f22;
+  --color-border: #27272a;
+  --color-border-strong: #3f3f46;
+  --color-fg: #fafafa;
+  --color-fg-muted: #a1a1aa;
+  --color-fg-subtle: #71717a;
+  --color-accent: #fafafa;
+  --color-accent-fg: #18181b;
+  --color-accent-hover: #d4d4d8;
+
+  --color-success: #34d399;
+  --color-success-fg: #6ee7b7;
+  --color-success-bg: #052e21;
+  --color-success-border: #065f46;
+
+  --color-warning: #fbbf24;
+  --color-warning-fg: #fcd34d;
+  --color-warning-bg: #2e1c05;
+  --color-warning-border: #92400e;
+
+  --color-danger: #f87171;
+  --color-danger-fg: #fca5a5;
+  --color-danger-bg: #2c0b0b;
+  --color-danger-border: #991b1b;
+
+  --color-info: #60a5fa;
+  --color-info-fg: #93c5fd;
+  --color-info-bg: #0b1a2e;
+  --color-info-border: #1e40af;
+
+  --color-focus-ring: #fafafa;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --color-bg: var(--color-bg);
+  --color-bg-subtle: var(--color-bg-subtle);
+  --color-surface: var(--color-surface);
+  --color-surface-hover: var(--color-surface-hover);
+  --color-surface-muted: var(--color-surface-muted);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-fg: var(--color-fg);
+  --color-fg-muted: var(--color-fg-muted);
+  --color-fg-subtle: var(--color-fg-subtle);
+  --color-accent: var(--color-accent);
+  --color-accent-fg: var(--color-accent-fg);
+  --color-accent-hover: var(--color-accent-hover);
+
+  --color-success: var(--color-success);
+  --color-success-fg: var(--color-success-fg);
+  --color-success-bg: var(--color-success-bg);
+  --color-success-border: var(--color-success-border);
+
+  --color-warning: var(--color-warning);
+  --color-warning-fg: var(--color-warning-fg);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-warning-border: var(--color-warning-border);
+
+  --color-danger: var(--color-danger);
+  --color-danger-fg: var(--color-danger-fg);
+  --color-danger-bg: var(--color-danger-bg);
+  --color-danger-border: var(--color-danger-border);
+
+  --color-info: var(--color-info);
+  --color-info-fg: var(--color-info-fg);
+  --color-info-bg: var(--color-info-bg);
+  --color-info-border: var(--color-info-border);
+
+  --color-focus-ring: var(--color-focus-ring);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  /* Redefining Tailwind's own radius scale (spec 18.15) so every existing
+     rounded-md/rounded-lg usage across the app adopts the same deliberate
+     values without needing a file-by-file rewrite. */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+}
+
+@utility focus-ring {
+  outline: none;
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility transition-standard {
+  transition-property: color, background-color, border-color, opacity, box-shadow, transform;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transition-duration: 150ms;
+}
+
+/* Prose spacing for rendered tutor markdown (spec 18.6). Kept minimal and
+   token-driven rather than pulling in @tailwindcss/typography for one use
+   site. */
+@utility tutor-prose {
+  & > :first-child {
+    margin-top: 0;
+  }
+  & > :last-child {
+    margin-bottom: 0;
+  }
+  & p {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.6;
+  }
+  & ul,
+  & ol {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+    padding-left: 1.25em;
+  }
+  & ul {
+    list-style-type: disc;
+  }
+  & ol {
+    list-style-type: decimal;
+  }
+  & li {
+    margin-top: 0.25em;
+  }
+  & li > p {
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  & strong {
+    font-weight: 600;
+  }
+  & code {
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-hover);
+    padding: 0.125em 0.375em;
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+  }
+  & pre {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+    overflow-x: auto;
+    border-radius: var(--radius-md);
+    background: var(--color-surface-hover);
+    padding: 0.75em 1em;
+  }
+  & pre code {
+    background: none;
+    padding: 0;
+  }
+  & a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}
+
+html {
+  color-scheme: light dark;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+/* Accessibility (spec 18.14): respect the user's reduced-motion preference
+   application-wide rather than opting every animated component in one by
+   one. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-slide-up {
+  animation: slide-up 220ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-scale-in {
+  animation: scale-in 150ms cubic-bezier(0.2, 0, 0, 1) both;
 }

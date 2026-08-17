@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Input } from "@/components/ui/Input";
+import { Button } from "@/components/ui/Button";
+import { InlineError } from "@/components/ui/ErrorState";
 
 interface GoalDTO {
   id: string;
@@ -88,37 +91,36 @@ export function ExamGoalForm({ courseId }: { courseId: string }) {
     const daysUntil = Math.ceil((new Date(load.goal.targetDate).getTime() - now) / (1000 * 60 * 60 * 24));
     return (
       <div className="mt-4">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-fg-muted">
           Exam in {daysUntil >= 0 ? `${daysUntil} day${daysUntil === 1 ? "" : "s"}` : "the past"} (
           {new Date(load.goal.targetDate).toLocaleDateString()}) —{" "}
-          <button type="button" onClick={() => clearGoal(load.goal!.id)} disabled={isBusy} className="underline underline-offset-2">
+          <button type="button" onClick={() => clearGoal(load.goal!.id)} disabled={isBusy} className="focus-ring rounded underline underline-offset-2">
             clear
           </button>
         </p>
-        {actionError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{actionError}</p>}
+        {actionError && (
+          <div className="mt-1">
+            <InlineError message={actionError} />
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className="mt-4">
-      <form onSubmit={setExamDate} className="flex items-center gap-2 text-xs text-zinc-500">
+      <form onSubmit={setExamDate} className="flex items-center gap-2 text-xs text-fg-muted">
         <span>Studying for an exam?</span>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-transparent"
-        />
-        <button
-          type="submit"
-          disabled={isBusy || !date}
-          className="rounded border border-zinc-300 px-2 py-1 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-        >
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto py-1 text-xs" />
+        <Button type="submit" variant="secondary" size="sm" disabled={isBusy || !date}>
           Set date
-        </button>
+        </Button>
       </form>
-      {actionError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{actionError}</p>}
+      {actionError && (
+        <div className="mt-1">
+          <InlineError message={actionError} />
+        </div>
+      )}
     </div>
   );
 }

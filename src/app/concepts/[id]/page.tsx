@@ -12,6 +12,9 @@ import {
 import { getReviewItemDetail } from "@/lib/review/review-queries";
 import { ConceptMyKnowledge } from "@/components/knowledge/ConceptMyKnowledge";
 import { PracticeConceptButton } from "@/components/knowledge/PracticeConceptButton";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { SectionHeader } from "@/components/ui/SectionHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -29,20 +32,18 @@ interface RelationshipEntryProps {
 
 function RelationshipEntry({ concept, label, confidence, evidence, needsReview }: RelationshipEntryProps) {
   return (
-    <details className="group rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-      <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium text-zinc-900 dark:text-zinc-50">
+    <details className="group rounded-md border border-border p-3">
+      <summary className="focus-ring flex cursor-pointer list-none items-center justify-between rounded text-sm font-medium text-fg">
         <span>
           {concept.name}
-          {label && <span className="ml-2 text-xs font-normal text-zinc-400">{label}</span>}
+          {label && <span className="ml-2 text-xs font-normal text-fg-subtle">{label}</span>}
         </span>
-        {needsReview && (
-          <span className="text-xs font-normal text-amber-600 dark:text-amber-400">needs review</span>
-        )}
+        {needsReview && <Badge tone="warning">needs review</Badge>}
       </summary>
-      <div className="mt-2 space-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+      <div className="mt-2 space-y-1 text-sm text-fg-muted">
         <p>Confidence: {(confidence * 100).toFixed(0)}%</p>
         <p className="italic">&ldquo;{evidence}&rdquo;</p>
-        <Link href={`/concepts/${concept.id}`} className="inline-block underline underline-offset-2">
+        <Link href={`/concepts/${concept.id}`} className="focus-ring inline-block rounded underline underline-offset-2">
           View concept
         </Link>
       </div>
@@ -53,7 +54,7 @@ function RelationshipEntry({ concept, label, confidence, evidence, needsReview }
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mt-8">
-      <h2 className="text-sm font-medium text-zinc-500">{title}</h2>
+      <SectionHeader title={title} />
       <div className="mt-2 space-y-2">{children}</div>
     </div>
   );
@@ -77,27 +78,19 @@ export default async function ConceptDetailPage({ params }: PageProps) {
   ]);
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <Link href={`/courses/${concept.course.id}/knowledge`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${concept.course.id}/knowledge`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← {concept.course.title} knowledge graph
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-        {concept.name}
-      </h1>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">{concept.name}</h1>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Link
-          href={`/courses/${concept.course.id}/study`}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-        >
-          Study
+        <Link href={`/courses/${concept.course.id}/study`}>
+          <Button variant="secondary">Study</Button>
         </Link>
         <PracticeConceptButton courseId={concept.course.id} conceptId={concept.id} />
-        <Link
-          href={`/courses/${concept.course.id}/tutor?conceptId=${concept.id}`}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-        >
-          Ask Tutor
+        <Link href={`/courses/${concept.course.id}/tutor?conceptId=${concept.id}`}>
+          <Button variant="secondary">Ask Tutor</Button>
         </Link>
       </div>
 
@@ -112,13 +105,13 @@ export default async function ConceptDetailPage({ params }: PageProps) {
         />
       )}
 
-      <h2 className="mt-10 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Course Knowledge</h2>
-      <p className="mt-1 text-sm text-zinc-500">Difficulty {concept.difficulty}/5</p>
-      {concept.description && <p className="mt-3 text-zinc-700 dark:text-zinc-300">{concept.description}</p>}
+      <h2 className="mt-10 text-sm font-semibold text-fg">Course Knowledge</h2>
+      <p className="mt-1 text-sm text-fg-muted">Difficulty {concept.difficulty}/5</p>
+      {concept.description && <p className="mt-3 text-fg">{concept.description}</p>}
 
       <Section title={`Prerequisites (${concept.prerequisites.length})`}>
         {concept.prerequisites.length === 0 ? (
-          <p className="text-sm text-zinc-500">None identified.</p>
+          <p className="text-sm text-fg-muted">None identified.</p>
         ) : (
           concept.prerequisites.map((entry, index) => (
             <RelationshipEntry key={`${entry.concept.id}-${index}`} {...entry} />
@@ -128,7 +121,7 @@ export default async function ConceptDetailPage({ params }: PageProps) {
 
       <Section title={`Used by (${concept.usedBy.length})`}>
         {concept.usedBy.length === 0 ? (
-          <p className="text-sm text-zinc-500">No concepts depend on this one yet.</p>
+          <p className="text-sm text-fg-muted">No concepts depend on this one yet.</p>
         ) : (
           concept.usedBy.map((entry, index) => (
             <RelationshipEntry key={`${entry.concept.id}-${index}`} {...entry} />
@@ -138,7 +131,7 @@ export default async function ConceptDetailPage({ params }: PageProps) {
 
       <Section title={`Related concepts (${concept.related.length})`}>
         {concept.related.length === 0 ? (
-          <p className="text-sm text-zinc-500">None identified.</p>
+          <p className="text-sm text-fg-muted">None identified.</p>
         ) : (
           concept.related.map((entry, index) => (
             <RelationshipEntry
@@ -155,14 +148,14 @@ export default async function ConceptDetailPage({ params }: PageProps) {
 
       <Section title={`Sources (${concept.sources.length})`}>
         {concept.sources.length === 0 ? (
-          <p className="text-sm text-zinc-500">No sources recorded.</p>
+          <p className="text-sm text-fg-muted">No sources recorded.</p>
         ) : (
           concept.sources.map((source) => (
-            <div key={source.id} className="rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-              <p className="font-medium text-zinc-900 dark:text-zinc-50">
+            <div key={source.id} className="rounded-md border border-border p-3 text-sm">
+              <p className="font-medium text-fg">
                 {source.documentName} · chunk {source.chunkIndex}
               </p>
-              <p className="mt-1 italic text-zinc-600 dark:text-zinc-400">&ldquo;{source.evidence}&rdquo;</p>
+              <p className="mt-1 italic text-fg-muted">&ldquo;{source.evidence}&rdquo;</p>
             </div>
           ))
         )}

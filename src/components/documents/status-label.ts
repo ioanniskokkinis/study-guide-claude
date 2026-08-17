@@ -1,3 +1,5 @@
+import type { BadgeTone } from "@/components/ui/Badge";
+
 export const STATUS_LABEL: Record<string, { label: string; className: string }> = {
   UPLOADED: { label: "Uploaded", className: "text-zinc-500" },
   PROCESSING: { label: "⟳ Processing", className: "text-amber-600 dark:text-amber-400" },
@@ -7,4 +9,16 @@ export const STATUS_LABEL: Record<string, { label: string; className: string }> 
 
 export function statusLabel(status: string) {
   return STATUS_LABEL[status] ?? { label: status, className: "text-zinc-500" };
+}
+
+const STATUS_TONE: Record<string, BadgeTone> = {
+  UPLOADED: "neutral",
+  PROCESSING: "warning",
+  READY: "success",
+  FAILED: "danger",
+};
+
+/** Badge tone for a document processing status (Phase 18.7). */
+export function statusTone(status: string): BadgeTone {
+  return STATUS_TONE[status] ?? "neutral";
 }

@@ -34,8 +34,8 @@ export default async function RoadmapPage({ params }: PageProps) {
   if (!roadmap || !progress || !todayPlan || !health) notFound();
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <Link href={`/courses/${courseId}`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${courseId}`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← Course
       </Link>
       <RoadmapView

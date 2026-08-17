@@ -24,7 +24,7 @@ export default async function ExamRunnerPage({ params }: PageProps) {
   if (!exam) notFound();
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
       <ExamRunner courseId={course.id} examId={examId} />
     </div>
   );

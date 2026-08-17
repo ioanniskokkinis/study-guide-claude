@@ -17,11 +17,11 @@ export default async function OralExamPage({ params }: PageProps) {
   if (!course) notFound();
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <Link href={`/courses/${course.id}/exam`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${course.id}/exam`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← Exam
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Oral Exam</h1>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">Oral Exam</h1>
       <div className="mt-6">
         <OralExamRunner courseId={course.id} />
       </div>

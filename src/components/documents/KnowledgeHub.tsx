@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { statusLabel } from "@/components/documents/status-label";
+import { statusLabel, statusTone } from "@/components/documents/status-label";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+import { Badge } from "@/components/ui/Badge";
+import { Input } from "@/components/ui/Input";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { InlineError } from "@/components/ui/ErrorState";
 
 interface FolderData {
   id: string;
@@ -217,21 +223,21 @@ export function KnowledgeHub({
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-1 text-sm">
+        <div className="flex flex-wrap items-center gap-1 text-sm">
           <button
             type="button"
             onClick={() => setCurrentFolderId(null)}
-            className={currentFolderId === null ? "font-medium text-zinc-900 dark:text-zinc-50" : "text-zinc-500 hover:underline"}
+            className={`focus-ring rounded-md px-1 ${currentFolderId === null ? "font-medium text-fg" : "text-fg-muted hover:text-fg hover:underline"}`}
           >
             All files
           </button>
           {breadcrumb.map((folder) => (
             <span key={folder.id} className="flex items-center gap-1">
-              <span className="text-zinc-400">/</span>
+              <span className="text-fg-subtle">/</span>
               <button
                 type="button"
                 onClick={() => setCurrentFolderId(folder.id)}
-                className={folder.id === currentFolderId ? "font-medium text-zinc-900 dark:text-zinc-50" : "text-zinc-500 hover:underline"}
+                className={`focus-ring rounded-md px-1 ${folder.id === currentFolderId ? "font-medium text-fg" : "text-fg-muted hover:text-fg hover:underline"}`}
               >
                 {folder.name}
               </button>
@@ -240,24 +246,20 @@ export function KnowledgeHub({
         </div>
 
         <div className="flex items-center gap-2">
-          <input
+          <Input
             type="search"
             placeholder="Search files…"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
-            className="rounded-md border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+            className="w-40 sm:w-56"
           />
-          <button
-            type="button"
-            onClick={() => setNewFolderOpen((v) => !v)}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-          >
+          <Button variant="secondary" size="sm" onClick={() => setNewFolderOpen((v) => !v)}>
             + New Folder
-          </button>
-          <label
-            className={`inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200 ${isUploading ? "pointer-events-none opacity-70" : ""}`}
-          >
-            {isUploading ? "Uploading…" : "Upload Files"}
+          </Button>
+          <label>
+            <span className={`focus-ring transition-standard inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-md bg-accent px-3 text-xs font-medium text-accent-fg hover:bg-accent-hover ${isUploading ? "pointer-events-none opacity-60" : ""}`}>
+              {isUploading ? "Uploading…" : "Upload Files"}
+            </span>
             <input
               ref={inputRef}
               type="file"
@@ -273,44 +275,36 @@ export function KnowledgeHub({
 
       {newFolderOpen && (
         <div className="mt-3 flex items-center gap-2">
-          <input
+          <Input
             autoFocus
             type="text"
             placeholder="Folder name"
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCreateFolder()}
-            className="rounded-md border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+            className="w-56"
           />
-          <button type="button" onClick={handleCreateFolder} className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-50">
+          <Button size="sm" variant="primary" onClick={handleCreateFolder}>
             Create
-          </button>
+          </Button>
         </div>
       )}
 
-      {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-3">
+          <InlineError message={error} />
+        </div>
+      )}
 
       {uploadRows.length > 0 && (
-        <ul className="mt-3 space-y-1 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+        <ul className="mt-3 space-y-1 rounded-md border border-border p-3 text-sm">
           {uploadRows.map((row) => (
             <li key={row.key} className="flex items-center justify-between gap-2">
               <span className="truncate">{row.filename}</span>
-              <span
-                className={
-                  row.status === "created"
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : row.status === "duplicate"
-                      ? "text-amber-600 dark:text-amber-400"
-                      : row.status === "failed"
-                        ? "text-red-600 dark:text-red-400"
-                        : "text-zinc-500"
-                }
-              >
-                {row.status === "uploading" && "Uploading…"}
-                {row.status === "created" && "✓ Uploaded"}
-                {row.status === "duplicate" && "Already uploaded"}
-                {row.status === "failed" && (row.error ?? "Failed")}
-              </span>
+              {row.status === "uploading" && <span className="text-fg-muted">Uploading…</span>}
+              {row.status === "created" && <Badge tone="success">Uploaded</Badge>}
+              {row.status === "duplicate" && <Badge tone="warning">Already uploaded</Badge>}
+              {row.status === "failed" && <Badge tone="danger">{row.error ?? "Failed"}</Badge>}
             </li>
           ))}
         </ul>
@@ -318,7 +312,7 @@ export function KnowledgeHub({
 
       {searchResults !== null ? (
         <div className="mt-4">
-          <p className="mb-2 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+          <p className="mb-2 text-xs font-medium tracking-wide text-fg-muted uppercase">
             {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
           </p>
           <DocumentList
@@ -336,7 +330,7 @@ export function KnowledgeHub({
         </div>
       ) : (
         <div
-          className={`mt-4 rounded-lg border-2 border-dashed p-4 transition-colors ${isDragOver ? "border-zinc-900 bg-zinc-50 dark:border-zinc-50 dark:bg-zinc-900" : "border-transparent"}`}
+          className={`transition-standard mt-4 rounded-lg border-2 border-dashed p-4 ${isDragOver ? "border-accent bg-surface-muted" : "border-transparent"}`}
           onDragOver={(e) => {
             e.preventDefault();
             setIsDragOver(true);
@@ -349,32 +343,33 @@ export function KnowledgeHub({
           }}
         >
           {childFolders.length === 0 && folderDocuments.length === 0 ? (
-            <p className="py-6 text-center text-sm text-zinc-500">
-              No folders or files here yet. Drag PDFs here or use Upload Files.
-            </p>
+            <EmptyState icon="📂" title="No folders or files here yet" description="Drag PDFs here or use Upload Files to get started." />
           ) : (
             <>
               {childFolders.length > 0 && (
                 <ul className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {childFolders.map((folder) => (
-                    <li key={folder.id} className="group flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
-                      <button type="button" onClick={() => setCurrentFolderId(folder.id)} className="min-w-0 flex-1 truncate text-left font-medium">
+                    <li key={folder.id} className="group flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
+                      <button type="button" onClick={() => setCurrentFolderId(folder.id)} className="focus-ring min-w-0 flex-1 truncate rounded text-left font-medium text-fg">
                         📁 {folder.name}
                       </button>
-                      <div className="hidden shrink-0 gap-2 group-hover:flex">
-                        <button
-                          type="button"
+                      <div className="hidden shrink-0 gap-1 group-hover:flex">
+                        <IconButton
+                          label="Rename folder"
+                          size="sm"
+                          icon={<span aria-hidden="true">✎</span>}
                           onClick={() => {
                             const name = prompt("Rename folder", folder.name);
                             if (name) handleRenameFolder(folder.id, name);
                           }}
-                          className="text-xs text-zinc-400 hover:underline"
-                        >
-                          Rename
-                        </button>
-                        <button type="button" onClick={() => handleDeleteFolder(folder.id)} className="text-xs text-red-500 hover:underline">
-                          Delete
-                        </button>
+                        />
+                        <IconButton
+                          label="Delete folder"
+                          size="sm"
+                          className="hover:text-danger"
+                          icon={<span aria-hidden="true">🗑</span>}
+                          onClick={() => handleDeleteFolder(folder.id)}
+                        />
                       </div>
                     </li>
                   ))}
@@ -398,21 +393,21 @@ export function KnowledgeHub({
       )}
 
       {selected.size > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-zinc-300 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-          <span className="font-medium">{selected.size} selected</span>
-          <button type="button" onClick={() => bulkMove(currentFolderId)} className="hover:underline">
+        <div className="animate-slide-up mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm">
+          <span className="font-medium text-fg">{selected.size} selected</span>
+          <button type="button" onClick={() => bulkMove(currentFolderId)} className="focus-ring rounded text-fg-muted hover:text-fg hover:underline">
             Move here
           </button>
-          <button type="button" onClick={() => bulkMove(null)} className="hover:underline">
+          <button type="button" onClick={() => bulkMove(null)} className="focus-ring rounded text-fg-muted hover:text-fg hover:underline">
             Move to root
           </button>
-          <button type="button" onClick={bulkRetry} className="hover:underline">
+          <button type="button" onClick={bulkRetry} className="focus-ring rounded text-fg-muted hover:text-fg hover:underline">
             Retry ingestion
           </button>
-          <button type="button" onClick={bulkDelete} className="text-red-600 hover:underline dark:text-red-400">
+          <button type="button" onClick={bulkDelete} className="focus-ring rounded text-danger hover:underline">
             Delete
           </button>
-          <button type="button" onClick={() => setSelected(new Set())} className="ml-auto text-zinc-400 hover:underline">
+          <button type="button" onClick={() => setSelected(new Set())} className="focus-ring ml-auto rounded text-fg-subtle hover:underline">
             Clear
           </button>
         </div>
@@ -439,7 +434,7 @@ function DocumentList({
   if (documents.length === 0) return null;
 
   return (
-    <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+    <ul className="divide-y divide-border rounded-lg border border-border">
       {documents.map((document, i) => {
         const status = statusLabel(document.processingStatus);
         return (
@@ -449,23 +444,24 @@ function DocumentList({
               checked={selected.has(document.id)}
               onChange={() => onToggleSelected(document.id)}
               aria-label={`Select ${document.originalFilename}`}
+              className="focus-ring accent-accent"
             />
             <div className="min-w-0 flex-1">
-              <p className="truncate font-medium text-zinc-900 dark:text-zinc-50">{document.originalFilename}</p>
-              <p className="truncate text-xs text-zinc-400">
+              <p className="truncate font-medium text-fg">{document.originalFilename}</p>
+              <p className="truncate text-xs text-fg-subtle">
                 {folderLabels?.[i] ? `${folderLabels[i]} · ` : ""}
                 {document._count.chunks} chunk{document._count.chunks === 1 ? "" : "s"}
                 {document.processingError ? ` — ${document.processingError}` : ""}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <span className={`text-sm font-medium ${status.className}`}>{status.label}</span>
+              <Badge tone={statusTone(document.processingStatus)}>{status.label}</Badge>
               {document.processingStatus === "FAILED" && (
-                <button type="button" onClick={() => onRetry(document.id)} className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-50">
+                <button type="button" onClick={() => onRetry(document.id)} className="focus-ring rounded text-sm font-medium text-fg hover:underline">
                   Retry
                 </button>
               )}
-              <button type="button" onClick={() => onDelete(document.id)} className="text-sm font-medium text-red-600 hover:underline dark:text-red-400">
+              <button type="button" onClick={() => onDelete(document.id)} className="focus-ring rounded text-sm font-medium text-danger hover:underline">
                 Delete
               </button>
             </div>

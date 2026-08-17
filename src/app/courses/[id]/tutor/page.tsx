@@ -6,6 +6,8 @@ import { getCourseMastery } from "@/lib/services/student-knowledge";
 import { TutorChat } from "@/components/tutor/TutorChat";
 import { TUTOR_MODES, type TutorModeValue } from "@/lib/tutor/types";
 import { env } from "@/lib/env";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Badge } from "@/components/ui/Badge";
 
 export const dynamic = "force-dynamic";
 
@@ -30,24 +32,29 @@ export default async function TutorPage({ params, searchParams }: PageProps) {
   const selected = conceptId ? concepts.find((c) => c.conceptId === conceptId) : undefined;
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <Link href={`/courses/${course.id}`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${course.id}`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← {course.title}
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">AI Tutor</h1>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">AI Tutor</h1>
 
       {concepts.length === 0 ? (
-        <p className="mt-6 rounded-lg border border-zinc-200 p-6 text-sm text-zinc-500 dark:border-zinc-800">
-          This course doesn&rsquo;t have a knowledge graph yet.{" "}
-          <Link href={`/courses/${course.id}/knowledge`} className="underline underline-offset-2">
-            Build it
-          </Link>{" "}
-          before you can start a tutoring conversation.
-        </p>
+        <div className="mt-6">
+          <EmptyState
+            icon="🎓"
+            title="No knowledge graph yet"
+            description="Build the knowledge graph before you can start a tutoring conversation."
+            action={
+              <Link href={`/courses/${course.id}/knowledge`} className="focus-ring rounded text-sm text-fg underline underline-offset-2">
+                Build it →
+              </Link>
+            }
+          />
+        </div>
       ) : !selected ? (
         <div className="mt-6">
-          <p className="text-sm text-zinc-500">Which concept would you like to work through?</p>
-          <ul className="mt-3 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          <p className="text-sm text-fg-muted">Which concept would you like to work through?</p>
+          <ul className="mt-3 divide-y divide-border rounded-lg border border-border">
             {concepts
               .slice()
               .sort((a, b) => a.overallMastery - b.overallMastery)
@@ -55,12 +62,10 @@ export default async function TutorPage({ params, searchParams }: PageProps) {
                 <li key={c.conceptId}>
                   <Link
                     href={`/courses/${course.id}/tutor?conceptId=${c.conceptId}`}
-                    className="flex items-center justify-between gap-4 px-4 py-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                    className="focus-ring transition-standard flex items-center justify-between gap-4 px-4 py-3 text-sm hover:bg-surface-hover"
                   >
-                    <span className="font-medium text-zinc-900 dark:text-zinc-50">{c.conceptName}</span>
-                    <span className="text-xs text-zinc-400">
-                      {c.exposureCount > 0 ? `${Math.round(c.overallMastery * 100)}% mastery` : "not yet studied"}
-                    </span>
+                    <span className="font-medium text-fg">{c.conceptName}</span>
+                    {c.exposureCount > 0 ? <Badge>{Math.round(c.overallMastery * 100)}% mastery</Badge> : <Badge tone="neutral">not yet studied</Badge>}
                   </Link>
                 </li>
               ))}

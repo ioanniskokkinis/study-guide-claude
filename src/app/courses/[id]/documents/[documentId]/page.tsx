@@ -3,8 +3,12 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { getCurrentUser } from "@/lib/auth/dev-user";
 import { getDocumentChunks, getDocumentForUser } from "@/lib/services/documents";
-import { statusLabel } from "@/components/documents/status-label";
+import { statusLabel, statusTone } from "@/components/documents/status-label";
 import { formatBytes } from "@/lib/format";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { InlineError } from "@/components/ui/ErrorState";
 
 export const dynamic = "force-dynamic";
 
@@ -26,47 +30,42 @@ export default async function DocumentPage({ params }: PageProps) {
   const status = statusLabel(document.processingStatus);
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <Link
-        href={`/courses/${courseId}`}
-        className="text-sm text-zinc-500 hover:underline"
-      >
+    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${courseId}`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← {document.course.title}
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-        {document.originalFilename}
-      </h1>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">{document.originalFilename}</h1>
 
-      <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 rounded-lg border border-zinc-200 p-4 text-sm dark:border-zinc-800 sm:grid-cols-3">
-        <Field label="Status">
-          <span className={status.className}>{status.label}</span>
-        </Field>
-        <Field label="File size">{formatBytes(document.fileSize)}</Field>
-        <Field label="Pages">{document.pageCount ?? "—"}</Field>
-        <Field label="Uploaded">
-          {new Date(document.createdAt).toLocaleString(undefined, {
-            dateStyle: "medium",
-            timeStyle: "short",
-          })}
-        </Field>
-        <Field label="Extracted text">
-          {document.extractedText
-            ? `${document.extractedText.length.toLocaleString()} characters`
-            : "—"}
-        </Field>
-        <Field label="Chunks">{document._count.chunks}</Field>
-      </dl>
+      <Card className="mt-6">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
+          <Field label="Status">
+            <Badge tone={statusTone(document.processingStatus)}>{status.label}</Badge>
+          </Field>
+          <Field label="File size">{formatBytes(document.fileSize)}</Field>
+          <Field label="Pages">{document.pageCount ?? "—"}</Field>
+          <Field label="Uploaded">
+            {new Date(document.createdAt).toLocaleString(undefined, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })}
+          </Field>
+          <Field label="Extracted text">
+            {document.extractedText ? `${document.extractedText.length.toLocaleString()} characters` : "—"}
+          </Field>
+          <Field label="Chunks">{document._count.chunks}</Field>
+        </dl>
+      </Card>
 
       {document.processingError && (
-        <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {document.processingError}
-        </p>
+        <div className="mt-4">
+          <InlineError message={document.processingError} />
+        </div>
       )}
 
       {document.extractedText && (
         <div className="mt-8">
-          <h2 className="text-sm font-medium text-zinc-500">Extracted text</h2>
-          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-200 p-4 text-sm text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+          <SectionHeader title="Extracted text" />
+          <pre className="mt-2 max-h-96 overflow-auto rounded-lg border border-border bg-surface-muted p-4 text-sm whitespace-pre-wrap text-fg-muted">
             {document.extractedText}
           </pre>
         </div>
@@ -74,21 +73,14 @@ export default async function DocumentPage({ params }: PageProps) {
 
       {chunks.length > 0 && (
         <div className="mt-8">
-          <h2 className="text-sm font-medium text-zinc-500">
-            Chunks ({chunks.length})
-          </h2>
+          <SectionHeader title={`Chunks (${chunks.length})`} />
           <ul className="mt-2 space-y-2">
             {chunks.map((chunk) => (
-              <li
-                key={chunk.id}
-                className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-              >
-                <p className="text-xs font-medium text-zinc-400">
+              <li key={chunk.id} className="rounded-lg border border-border p-3 text-sm">
+                <p className="text-xs font-medium text-fg-subtle">
                   Chunk {chunk.chunkIndex} · ~{chunk.tokenCount} tokens
                 </p>
-                <p className="mt-1 line-clamp-3 text-zinc-700 dark:text-zinc-300">
-                  {chunk.text}
-                </p>
+                <p className="mt-1 line-clamp-3 text-fg-muted">{chunk.text}</p>
               </li>
             ))}
           </ul>
@@ -101,8 +93,8 @@ export default async function DocumentPage({ params }: PageProps) {
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <dt className="text-xs text-zinc-400">{label}</dt>
-      <dd className="mt-0.5 font-medium text-zinc-900 dark:text-zinc-50">{children}</dd>
+      <dt className="text-xs text-fg-subtle">{label}</dt>
+      <dd className="mt-0.5 font-medium text-fg">{children}</dd>
     </div>
   );
 }

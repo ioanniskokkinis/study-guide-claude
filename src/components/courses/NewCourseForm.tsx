@@ -2,6 +2,9 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
+import { Input, Textarea } from "@/components/ui/Input";
+import { InlineError } from "@/components/ui/ErrorState";
 
 export function NewCourseForm() {
   const router = useRouter();
@@ -42,53 +45,25 @@ export function NewCourseForm() {
 
   if (!isOpen) {
     return (
-      <button
-        type="button"
-        onClick={() => setIsOpen(true)}
-        className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-      >
+      <Button variant="primary" onClick={() => setIsOpen(true)}>
         + New Course
-      </button>
+      </Button>
     );
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
-    >
+    <form onSubmit={handleSubmit} className="animate-slide-up rounded-lg border border-border p-4">
       <div className="flex flex-col gap-3">
-        <input
-          autoFocus
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder="Course title"
-          required
-          className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-transparent"
-        />
-        <textarea
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          placeholder="Description (optional)"
-          rows={2}
-          className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-transparent"
-        />
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+        <Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Course title" required />
+        <Textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description (optional)" rows={2} />
+        {error && <InlineError message={error} />}
         <div className="flex gap-2">
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900"
-          >
+          <Button type="submit" variant="primary" loading={isSubmitting}>
             {isSubmitting ? "Creating…" : "Create"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsOpen(false)}
-            className="rounded-md px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
-          >
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => setIsOpen(false)}>
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
     </form>

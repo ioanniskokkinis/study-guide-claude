@@ -1,22 +1,22 @@
 import type { ConceptMasterySummary, EvidenceSummary, MistakeSummary, PrerequisiteStatusNode } from "@/lib/services/student-knowledge";
 import type { ReviewItemDetail } from "@/lib/review/review-queries";
 import { formatRelativeDays } from "@/lib/format";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { MistakeResolveButton } from "./MistakeResolveButton";
 import { PracticeConceptButton } from "./PracticeConceptButton";
-import { formatMasteryPercent, masteryStatusLabel } from "./mastery-status-label";
+import { formatMasteryPercent, masteryStatusLabel, masteryStatusTone } from "./mastery-status-label";
 
 function DimensionBar({ label, score }: { label: string; score: number }) {
   return (
     <div>
-      <div className="flex items-center justify-between text-xs text-zinc-500">
+      <div className="flex items-center justify-between text-xs text-fg-muted">
         <span>{label}</span>
         <span>{formatMasteryPercent(score)}</span>
       </div>
-      <div className="mt-1 h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800">
-        <div
-          className="h-1.5 rounded-full bg-zinc-900 dark:bg-zinc-50"
-          style={{ width: `${Math.round(score * 100)}%` }}
-        />
+      <div className="mt-1">
+        <ProgressBar value={score} />
       </div>
     </div>
   );
@@ -46,21 +46,21 @@ export function ConceptMyKnowledge({
     : undefined;
 
   return (
-    <div className="mt-8 rounded-lg border-2 border-dashed border-zinc-300 p-4 dark:border-zinc-700">
+    <Card className="mt-8 border-2 border-dashed">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">My Knowledge</h2>
-        <span className={`text-sm font-medium ${status.className}`}>{status.label}</span>
+        <h2 className="text-sm font-semibold text-fg">My Knowledge</h2>
+        <Badge tone={masteryStatusTone(mastery.status)}>{status.label}</Badge>
       </div>
 
       {mastery.exposureCount === 0 ? (
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="mt-2 text-sm text-fg-muted">
           Not enough evidence yet — this will fill in once you attempt questions on this concept.
         </p>
       ) : (
         <>
-          <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-50">
+          <p className="mt-1 text-xl font-semibold text-fg">
             {formatMasteryPercent(mastery.overallMastery)}
-            <span className="ml-2 text-sm font-normal text-zinc-500">overall mastery</span>
+            <span className="ml-2 text-sm font-normal text-fg-muted">overall mastery</span>
           </p>
 
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -72,24 +72,24 @@ export function ConceptMyKnowledge({
 
           <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
             <div>
-              <dt className="text-xs text-zinc-400">Confidence</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{formatMasteryPercent(mastery.confidenceScore)}</dd>
+              <dt className="text-xs text-fg-subtle">Confidence</dt>
+              <dd className="text-fg">{formatMasteryPercent(mastery.confidenceScore)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-400">Accuracy</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{accuracy == null ? "—" : formatMasteryPercent(accuracy)}</dd>
+              <dt className="text-xs text-fg-subtle">Accuracy</dt>
+              <dd className="text-fg">{accuracy == null ? "—" : formatMasteryPercent(accuracy)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-400">Attempts</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{mastery.attemptCount}</dd>
+              <dt className="text-xs text-fg-subtle">Attempts</dt>
+              <dd className="text-fg">{mastery.attemptCount}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-400">Successes</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{mastery.successCount}</dd>
+              <dt className="text-xs text-fg-subtle">Successes</dt>
+              <dd className="text-fg">{mastery.successCount}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-400">Failures</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{mastery.failureCount}</dd>
+              <dt className="text-xs text-fg-subtle">Failures</dt>
+              <dd className="text-fg">{mastery.failureCount}</dd>
             </div>
           </dl>
         </>
@@ -97,21 +97,19 @@ export function ConceptMyKnowledge({
 
       {reviewDetail && (
         <div className="mt-4">
-          <h3 className="text-xs font-medium text-zinc-500">Spaced review</h3>
+          <h3 className="text-xs font-medium text-fg-muted">Spaced review</h3>
           <dl className="mt-1 grid grid-cols-3 gap-3 text-sm">
             <div>
-              <dt className="text-xs text-zinc-400">Reviews</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{reviewDetail.reviewCount}</dd>
+              <dt className="text-xs text-fg-subtle">Reviews</dt>
+              <dd className="text-fg">{reviewDetail.reviewCount}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-400">Last review</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">
-                {reviewDetail.item.lastReviewedAt ? formatRelativeDays(reviewDetail.item.lastReviewedAt) : "—"}
-              </dd>
+              <dt className="text-xs text-fg-subtle">Last review</dt>
+              <dd className="text-fg">{reviewDetail.item.lastReviewedAt ? formatRelativeDays(reviewDetail.item.lastReviewedAt) : "—"}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-400">Next review</dt>
-              <dd className="text-zinc-900 dark:text-zinc-50">{formatRelativeDays(reviewDetail.item.nextReviewAt)}</dd>
+              <dt className="text-xs text-fg-subtle">Next review</dt>
+              <dd className="text-fg">{formatRelativeDays(reviewDetail.item.nextReviewAt)}</dd>
             </div>
           </dl>
         </div>
@@ -119,61 +117,53 @@ export function ConceptMyKnowledge({
 
       {prerequisiteStatus && prerequisiteStatus.prerequisites.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-xs font-medium text-zinc-500">Prerequisite status</h3>
+          <h3 className="text-xs font-medium text-fg-muted">Prerequisite status</h3>
           <ul className="mt-1 space-y-1 text-sm">
             {prerequisiteStatus.prerequisites.map((p) => {
               const prereqStatus = masteryStatusLabel(p.mastery.status);
               return (
                 <li key={p.concept.id} className="flex items-center justify-between">
-                  <span className="text-zinc-700 dark:text-zinc-300">{p.concept.name}</span>
-                  <span className={`text-xs font-medium ${prereqStatus.className}`}>
+                  <span className="text-fg">{p.concept.name}</span>
+                  <Badge tone={masteryStatusTone(p.mastery.status)}>
                     {prereqStatus.label} · {formatMasteryPercent(p.mastery.overallMastery)}
-                  </span>
+                  </Badge>
                 </li>
               );
             })}
           </ul>
           {weakerPrerequisite && (
-            <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
-              <p className="font-medium text-amber-800 dark:text-amber-300">Recommended prerequisite</p>
-              <p className="mt-1 text-zinc-700 dark:text-zinc-300">
+            <Card padding="sm" className="mt-3 border-warning-border bg-warning-bg">
+              <p className="text-sm font-medium text-warning-fg">Recommended prerequisite</p>
+              <p className="mt-1 text-sm text-warning-fg/90">
                 {weakerPrerequisite.concept.name} — {formatMasteryPercent(weakerPrerequisite.mastery.overallMastery)} mastery, lower than this
                 concept&rsquo;s.
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <a
                   href={`/concepts/${weakerPrerequisite.concept.id}`}
-                  className="inline-block rounded-md border border-amber-400 px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                  className="focus-ring inline-block rounded-md border border-warning-border px-3 py-1 text-xs font-medium text-warning-fg hover:bg-warning-bg"
                 >
                   Review prerequisite
                 </a>
                 {/* Never hard-blocking (Phase 2 §F): practicing this concept directly is always available too. */}
                 <PracticeConceptButton courseId={courseId} conceptId={mastery.conceptId} label="Practice anyway" />
               </div>
-            </div>
+            </Card>
           )}
         </div>
       )}
 
       {mistakes.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-xs font-medium text-zinc-500">Mistakes ({mistakes.length})</h3>
+          <h3 className="text-xs font-medium text-fg-muted">Mistakes ({mistakes.length})</h3>
           <ul className="mt-1 space-y-2">
             {mistakes.map((m) => (
               <li key={m.id} className="flex items-start justify-between gap-3 text-sm">
                 <div>
-                  <span className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 dark:border-zinc-700">
-                    {m.category.replaceAll("_", " ").toLowerCase()}
-                  </span>
-                  <p className="mt-1 text-zinc-600 dark:text-zinc-400">{m.description}</p>
+                  <Badge>{m.category.replaceAll("_", " ").toLowerCase()}</Badge>
+                  <p className="mt-1 text-fg-muted">{m.description}</p>
                 </div>
-                {m.resolved ? (
-                  <span className="shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">Reviewed</span>
-                ) : (
-                  <div className="shrink-0">
-                    <MistakeResolveButton mistakeId={m.id} />
-                  </div>
-                )}
+                {m.resolved ? <Badge tone="success">Reviewed</Badge> : <MistakeResolveButton mistakeId={m.id} />}
               </li>
             ))}
           </ul>
@@ -182,8 +172,8 @@ export function ConceptMyKnowledge({
 
       {evidence.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-xs font-medium text-zinc-500">Recent evidence</h3>
-          <ul className="mt-1 space-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+          <h3 className="text-xs font-medium text-fg-muted">Recent evidence</h3>
+          <ul className="mt-1 space-y-1 text-sm text-fg-muted">
             {evidence.slice(0, 10).map((e) => (
               <li key={e.id} className="flex items-center justify-between">
                 <span>{e.outcome.charAt(0) + e.outcome.slice(1).toLowerCase()}</span>
@@ -195,6 +185,6 @@ export function ConceptMyKnowledge({
           </ul>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

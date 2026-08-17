@@ -1,4 +1,7 @@
 import type { ReadinessOutput } from "@/lib/exam/types";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 
 const STATUS_LABEL: Record<ReadinessOutput["status"], string> = {
   NOT_READY: "Not Ready",
@@ -8,47 +11,50 @@ const STATUS_LABEL: Record<ReadinessOutput["status"], string> = {
   MASTERED: "Mastered",
 };
 
-const STATUS_COLOR: Record<ReadinessOutput["status"], string> = {
-  NOT_READY: "bg-red-500",
-  DEVELOPING: "bg-amber-500",
-  ALMOST_READY: "bg-amber-400",
-  READY: "bg-emerald-500",
-  MASTERED: "bg-emerald-600",
+const STATUS_TONE: Record<ReadinessOutput["status"], "danger" | "warning" | "success"> = {
+  NOT_READY: "danger",
+  DEVELOPING: "warning",
+  ALMOST_READY: "warning",
+  READY: "success",
+  MASTERED: "success",
 };
+
+const PROGRESS_TONE: Record<ReadinessOutput["status"], "danger" | "warning" | "success"> = STATUS_TONE;
 
 /** Exam Readiness dashboard section (spec §66) — real numbers, no generic motivational text (spec §42). */
 export function ReadinessCard({ readiness }: { readiness: ReadinessOutput }) {
   const percent = Math.round(readiness.readiness * 100);
 
   return (
-    <div className="mt-6 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-      <h2 className="text-xs font-medium tracking-wide text-zinc-400 uppercase">Exam Readiness</h2>
-
-      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
-        <div className={`h-full ${STATUS_COLOR[readiness.status]}`} style={{ width: `${percent}%` }} />
+    <Card className="mt-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-xs font-medium tracking-wide text-fg-muted uppercase">Exam Readiness</h2>
+        <Badge tone={STATUS_TONE[readiness.status]}>{STATUS_LABEL[readiness.status]}</Badge>
       </div>
-      <p className="mt-2 text-sm text-zinc-500">
-        {percent}% · <span className="font-medium text-zinc-700 dark:text-zinc-300">{STATUS_LABEL[readiness.status]}</span>
-      </p>
 
-      <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">{readiness.explanation}</p>
+      <div className="mt-3">
+        <ProgressBar value={readiness.readiness} tone={PROGRESS_TONE[readiness.status]} label="Exam readiness" />
+      </div>
+      <p className="mt-2 text-sm text-fg-muted">{percent}%</p>
+
+      <p className="mt-3 text-sm text-fg-muted">{readiness.explanation}</p>
 
       {readiness.weakAreas.length > 0 && (
         <div className="mt-3">
-          <p className="text-xs font-medium text-zinc-400 uppercase">Needs work</p>
+          <p className="text-xs font-medium text-fg-subtle uppercase">Needs work</p>
           <ul className="mt-1 flex flex-wrap gap-2">
             {readiness.weakAreas.map((name) => (
-              <li key={name} className="rounded-full bg-amber-50 px-2.5 py-1 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                {name}
+              <li key={name}>
+                <Badge tone="warning">{name}</Badge>
               </li>
             ))}
           </ul>
         </div>
       )}
 
-      <p className="mt-3 text-sm text-zinc-500">
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">Recommended:</span> {readiness.recommendation}
+      <p className="mt-3 text-sm text-fg-muted">
+        <span className="font-medium text-fg">Recommended:</span> {readiness.recommendation}
       </p>
-    </div>
+    </Card>
   );
 }

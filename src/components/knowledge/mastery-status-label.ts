@@ -21,3 +21,26 @@ export const MASTERY_BUCKET_LABEL: Record<string, { label: string; className: st
 export function formatMasteryPercent(overallMastery: number): string {
   return `${Math.round(overallMastery * 100)}%`;
 }
+
+/** Design-system Badge tone for a mastery bucket (Phase 18.3) — the single mapping every redesigned mastery/status display should read from instead of picking a color per callsite. */
+export const MASTERY_BUCKET_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  strong: "success",
+  developing: "warning",
+  weak: "danger",
+  unknown: "neutral",
+};
+
+export function masteryStatusTone(status: string): "success" | "warning" | "danger" | "neutral" {
+  switch (status) {
+    case "STRONG":
+    case "MASTERED":
+      return "success";
+    case "DEVELOPING":
+      return "warning";
+    case "LEARNING":
+    case "NEEDS_REMEDIATION":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}

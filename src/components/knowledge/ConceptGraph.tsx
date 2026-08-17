@@ -3,6 +3,8 @@
 import { useMemo, useRef, useState, type MouseEvent, type WheelEvent } from "react";
 import Link from "next/link";
 import { computeLayeredLayout, type GraphEdge, type GraphNode } from "@/lib/knowledge/graph-layout";
+import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const EDGE_COLORS: Record<string, string> = {
   prerequisite: "#dc2626",
@@ -62,17 +64,13 @@ export function ConceptGraph({ nodes, edges }: { nodes: GraphNode[]; edges: Grap
   const selectedNode = selectedId ? positionById.get(selectedId) : null;
 
   if (nodes.length === 0) {
-    return (
-      <div className="flex h-52 items-center justify-center rounded-lg border border-dashed border-zinc-300 text-sm text-zinc-500 dark:border-zinc-700">
-        No concepts to visualize yet.
-      </div>
-    );
+    return <EmptyState icon="🕸️" title="No concepts to visualize yet" />;
   }
 
   return (
     <div>
       <div
-        className="overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950"
+        className="transition-standard overflow-hidden rounded-lg border border-border bg-surface-muted"
         style={{ height: 420, cursor: isDragging ? "grabbing" : "grab" }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
@@ -110,11 +108,16 @@ export function ConceptGraph({ nodes, edges }: { nodes: GraphNode[]; edges: Grap
               >
                 <circle
                   r={26}
-                  fill={selectedId === node.id ? "#18181b" : "#ffffff"}
-                  stroke="#18181b"
+                  fill={selectedId === node.id ? "var(--color-accent)" : "var(--color-surface)"}
+                  stroke="var(--color-accent)"
                   strokeWidth={1.5}
                 />
-                <text textAnchor="middle" dy={4} fontSize={10} fill={selectedId === node.id ? "#ffffff" : "#18181b"}>
+                <text
+                  textAnchor="middle"
+                  dy={4}
+                  fontSize={10}
+                  fill={selectedId === node.id ? "var(--color-accent-fg)" : "var(--color-fg)"}
+                >
                   {node.name.length > 12 ? `${node.name.slice(0, 11)}…` : node.name}
                 </text>
               </g>
@@ -123,7 +126,7 @@ export function ConceptGraph({ nodes, edges }: { nodes: GraphNode[]; edges: Grap
         </svg>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
         {Object.entries(EDGE_COLORS).map(([type, color]) => (
           <span key={type} className="inline-flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
@@ -133,12 +136,12 @@ export function ConceptGraph({ nodes, edges }: { nodes: GraphNode[]; edges: Grap
       </div>
 
       {selectedNode && (
-        <div className="mt-3 flex items-center justify-between rounded-md border border-zinc-200 px-4 py-2 text-sm dark:border-zinc-800">
-          <span className="font-medium text-zinc-900 dark:text-zinc-50">{selectedNode.name}</span>
-          <Link href={`/concepts/${selectedNode.id}`} className="underline underline-offset-2">
+        <Card padding="sm" className="animate-slide-up mt-3 flex items-center justify-between">
+          <span className="font-medium text-fg">{selectedNode.name}</span>
+          <Link href={`/concepts/${selectedNode.id}`} className="focus-ring rounded text-sm underline underline-offset-2">
             View details
           </Link>
-        </div>
+        </Card>
       )}
     </div>
   );

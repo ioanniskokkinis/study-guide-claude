@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
+import { InlineError } from "@/components/ui/ErrorState";
 
 const PRACTICE_QUESTION_COUNT = 5;
 
@@ -44,15 +46,10 @@ export function PracticeConceptButton({
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={loading}
-        className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-      >
+      <Button size="sm" variant="secondary" loading={loading} onClick={handleClick}>
         {loading ? "Starting…" : label}
-      </button>
-      {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      </Button>
+      {error && <InlineError message={error} />}
     </div>
   );
 }

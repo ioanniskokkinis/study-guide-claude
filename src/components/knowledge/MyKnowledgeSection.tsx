@@ -1,35 +1,38 @@
 import Link from "next/link";
 import type { KnowledgeSnapshot, MistakeSummary } from "@/lib/services/student-knowledge";
+import { Card } from "@/components/ui/Card";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Badge } from "@/components/ui/Badge";
 import { MistakeResolveButton } from "./MistakeResolveButton";
-import { formatMasteryPercent, masteryStatusLabel } from "./mastery-status-label";
+import { formatMasteryPercent, masteryStatusLabel, MASTERY_BUCKET_TONE } from "./mastery-status-label";
 
 function ConceptBucketColumn({
   title,
   concepts,
   emptyLabel,
+  tone,
 }: {
   title: string;
   concepts: KnowledgeSnapshot["strongConcepts"];
   emptyLabel: string;
+  tone: "success" | "warning" | "danger" | "neutral";
 }) {
   return (
     <div>
-      <h3 className="text-xs font-medium text-zinc-500">
-        {title} ({concepts.length})
-      </h3>
+      <div className="flex items-center gap-2">
+        <h3 className="text-xs font-medium text-fg-muted">{title}</h3>
+        <Badge tone={tone}>{concepts.length}</Badge>
+      </div>
       {concepts.length === 0 ? (
-        <p className="mt-2 text-sm text-zinc-400">{emptyLabel}</p>
+        <p className="mt-2 text-sm text-fg-subtle">{emptyLabel}</p>
       ) : (
         <ul className="mt-2 space-y-1">
           {concepts.map((c) => (
             <li key={c.conceptId} className="flex items-center justify-between gap-2 text-sm">
-              <Link
-                href={`/concepts/${c.conceptId}`}
-                className="truncate text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
-              >
+              <Link href={`/concepts/${c.conceptId}`} className="focus-ring truncate rounded text-fg hover:underline">
                 {c.conceptName}
               </Link>
-              <span className="shrink-0 text-zinc-500">{formatMasteryPercent(c.overallMastery)}</span>
+              <span className="shrink-0 text-fg-muted">{formatMasteryPercent(c.overallMastery)}</span>
             </li>
           ))}
         </ul>
@@ -43,25 +46,16 @@ function MistakeRow({ mistake }: { mistake: MistakeSummary }) {
     <li className="flex items-start justify-between gap-4 px-4 py-3">
       <div className="min-w-0">
         <div className="flex items-center gap-2 text-sm">
-          <Link
-            href={`/concepts/${mistake.conceptId}`}
-            className="font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
-          >
+          <Link href={`/concepts/${mistake.conceptId}`} className="focus-ring truncate rounded font-medium text-fg hover:underline">
             {mistake.conceptName}
           </Link>
-          <span className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 dark:border-zinc-700">
-            {mistake.category.replaceAll("_", " ").toLowerCase()}
-          </span>
-          <span className="text-xs text-zinc-400">{mistake.severity.toLowerCase()}</span>
+          <Badge>{mistake.category.replaceAll("_", " ").toLowerCase()}</Badge>
+          <span className="text-xs text-fg-subtle">{mistake.severity.toLowerCase()}</span>
         </div>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{mistake.description}</p>
+        <p className="mt-1 text-sm text-fg-muted">{mistake.description}</p>
       </div>
       <div className="shrink-0 text-right">
-        {mistake.resolved ? (
-          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Reviewed</span>
-        ) : (
-          <MistakeResolveButton mistakeId={mistake.id} />
-        )}
+        {mistake.resolved ? <Badge tone="success">Reviewed</Badge> : <MistakeResolveButton mistakeId={mistake.id} />}
       </div>
     </li>
   );
@@ -81,30 +75,30 @@ export function MyKnowledgeSection({
 
   return (
     <div className="mt-10">
-      <h2 className="text-sm font-medium text-zinc-500">My Knowledge</h2>
+      <SectionHeader title="My Knowledge" />
 
       {totalTracked === 0 ? (
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="mt-2 text-sm text-fg-muted">
           No study activity yet — mastery data will appear here once you start answering questions.
         </p>
       ) : (
-        <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+        <p className="mt-1 text-2xl font-semibold text-fg">
           {formatMasteryPercent(snapshot.overallMastery)}
-          <span className="ml-2 text-sm font-normal text-zinc-500">overall mastery</span>
+          <span className="ml-2 text-sm font-normal text-fg-muted">overall mastery</span>
         </p>
       )}
 
       <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <ConceptBucketColumn title="Strong" concepts={snapshot.strongConcepts} emptyLabel="None yet." />
-        <ConceptBucketColumn title="Developing" concepts={developingConcepts} emptyLabel="None yet." />
-        <ConceptBucketColumn title="Weak" concepts={snapshot.weakConcepts} emptyLabel="None yet." />
-        <ConceptBucketColumn title="Unknown" concepts={snapshot.unknownConcepts} emptyLabel="None." />
+        <ConceptBucketColumn title="Strong" concepts={snapshot.strongConcepts} emptyLabel="None yet." tone={MASTERY_BUCKET_TONE.strong} />
+        <ConceptBucketColumn title="Developing" concepts={developingConcepts} emptyLabel="None yet." tone={MASTERY_BUCKET_TONE.developing} />
+        <ConceptBucketColumn title="Weak" concepts={snapshot.weakConcepts} emptyLabel="None yet." tone={MASTERY_BUCKET_TONE.weak} />
+        <ConceptBucketColumn title="Unknown" concepts={snapshot.unknownConcepts} emptyLabel="None." tone={MASTERY_BUCKET_TONE.unknown} />
       </div>
 
       {snapshot.prerequisiteGaps.length > 0 && (
-        <div className="mt-6 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30">
-          <p className="font-medium text-amber-800 dark:text-amber-300">Remediation candidates</p>
-          <ul className="mt-1 space-y-1 text-amber-700 dark:text-amber-400">
+        <Card className="mt-6 border-warning-border bg-warning-bg">
+          <p className="text-sm font-medium text-warning-fg">Remediation candidates</p>
+          <ul className="mt-1 space-y-1 text-sm text-warning-fg/90">
             {snapshot.prerequisiteGaps.map((gap) => (
               <li key={`${gap.prerequisite.conceptId}-${gap.concept.conceptId}`}>
                 <Link href={`/concepts/${gap.prerequisite.conceptId}`} className="underline underline-offset-2">
@@ -118,14 +112,14 @@ export function MyKnowledgeSection({
               </li>
             ))}
           </ul>
-        </div>
+        </Card>
       )}
 
-      <h3 className="mt-8 text-sm font-medium text-zinc-500">Mistakes to review ({mistakes.length})</h3>
+      <h3 className="mt-8 text-sm font-medium text-fg-muted">Mistakes to review ({mistakes.length})</h3>
       {mistakes.length === 0 ? (
-        <p className="mt-2 text-sm text-zinc-500">No mistakes recorded yet.</p>
+        <p className="mt-2 text-sm text-fg-muted">No mistakes recorded yet.</p>
       ) : (
-        <ul className="mt-2 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
           {mistakes.map((mistake) => (
             <MistakeRow key={mistake.id} mistake={mistake} />
           ))}

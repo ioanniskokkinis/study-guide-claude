@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Textarea } from "@/components/ui/Input";
+import { InlineError } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/Skeleton";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 
 interface Option {
   id: string;
@@ -62,6 +68,12 @@ function formatTime(seconds: number): string {
 function emptyDraft(): DraftAnswer {
   return { answerText: "", selectedOptionIds: [], confidence: null };
 }
+
+const CONFIDENCE_LABEL: Record<NonNullable<DraftAnswer["confidence"]>, string> = {
+  CONFIDENT: "Confident",
+  UNSURE: "Unsure",
+  GUESSING: "Guessing",
+};
 
 export function ExamRunner({ courseId, examId }: { courseId: string; examId: string }) {
   const router = useRouter();
@@ -184,58 +196,60 @@ export function ExamRunner({ courseId, examId }: { courseId: string; examId: str
   }
 
   if (load.status === "loading") {
-    return <p className="text-sm text-zinc-500">Loading exam…</p>;
+    return <LoadingState label="Loading exam" />;
   }
   if (load.status === "error") {
-    return <p className="text-sm text-red-600 dark:text-red-400">{load.message}</p>;
+    return <InlineError message={load.message} />;
   }
 
   const { exam } = load.data;
 
   if (exam.status === "CREATED") {
     return (
-      <div className="rounded-lg border border-zinc-200 p-6 text-center dark:border-zinc-800">
-        <p className="text-sm text-zinc-500">{exam.questionCount} questions{exam.timeLimitSeconds ? ` · ${Math.round(exam.timeLimitSeconds / 60)} min` : ""}</p>
-        <button
-          type="button"
-          onClick={() => void start()}
-          disabled={starting}
-          className="mt-4 rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          {starting ? "Starting…" : "Begin Exam"}
-        </button>
-      </div>
+      <Card className="text-center">
+        <p className="text-sm text-fg-muted">
+          {exam.questionCount} questions{exam.timeLimitSeconds ? ` · ${Math.round(exam.timeLimitSeconds / 60)} min` : ""}
+        </p>
+        <div className="mt-4">
+          <Button variant="primary" size="lg" loading={starting} onClick={() => void start()}>
+            {starting ? "Starting…" : "Begin Exam"}
+          </Button>
+        </div>
+      </Card>
     );
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between border-b border-zinc-200 pb-3 dark:border-zinc-800">
-        <p className="text-sm font-medium text-zinc-500">
+      <div className="flex items-center justify-between border-b border-border pb-3">
+        <p className="text-sm font-medium text-fg-muted">
           Question {index + 1} / {questions.length}
         </p>
         {tickSeconds != null && (
-          <p className={tickSeconds < 60 ? "text-sm font-mono text-red-600 dark:text-red-400" : "text-sm font-mono text-zinc-500"}>{formatTime(tickSeconds)}</p>
+          <p className={`font-mono text-sm ${tickSeconds < 60 ? "font-semibold text-danger" : "text-fg-muted"}`}>{formatTime(tickSeconds)}</p>
         )}
+      </div>
+      <div className="mt-3">
+        <ProgressBar value={questions.length > 0 ? (index + (current?.answered ? 1 : 0)) / questions.length : 0} label="Exam progress" />
       </div>
 
       {current && (
-        <div className="mt-6">
+        <div className="animate-fade-in mt-6">
           {current.scenario && (
-            <div className="mb-4 rounded-md bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
-              <p className="font-medium text-zinc-700 dark:text-zinc-300">{current.scenario.context}</p>
-              <p className="mt-2 text-zinc-600 dark:text-zinc-400">Objective: {current.scenario.objective}</p>
+            <Card padding="sm" className="mb-4 bg-surface-muted">
+              <p className="font-medium text-fg">{current.scenario.context}</p>
+              <p className="mt-2 text-sm text-fg-muted">Objective: {current.scenario.objective}</p>
               {current.scenario.constraints.length > 0 && (
-                <ul className="mt-2 list-inside list-disc text-zinc-600 dark:text-zinc-400">
+                <ul className="mt-2 list-inside list-disc text-sm text-fg-muted">
                   {current.scenario.constraints.map((c, i) => (
                     <li key={i}>{c}</li>
                   ))}
                 </ul>
               )}
-            </div>
+            </Card>
           )}
 
-          <p className="text-base text-zinc-900 dark:text-zinc-50">{current.prompt}</p>
+          <p className="text-lg leading-relaxed text-fg">{current.prompt}</p>
 
           <div className="mt-4">
             {current.options ? (
@@ -244,7 +258,12 @@ export function ExamRunner({ courseId, examId }: { courseId: string; examId: str
                   const multi = current.questionType === "MULTI_SELECT";
                   const checked = draft.selectedOptionIds.includes(opt.id);
                   return (
-                    <label key={opt.id} className="flex items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+                    <label
+                      key={opt.id}
+                      className={`transition-standard flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                        checked ? "border-accent bg-surface-muted" : "border-border"
+                      }`}
+                    >
                       <input
                         type={multi ? "checkbox" : "radio"}
                         name={current.id}
@@ -258,6 +277,7 @@ export function ExamRunner({ courseId, examId }: { courseId: string; examId: str
                               : [opt.id],
                           })
                         }
+                        className="focus-ring accent-accent"
                       />
                       {opt.text}
                     </label>
@@ -265,79 +285,72 @@ export function ExamRunner({ courseId, examId }: { courseId: string; examId: str
                 })}
               </div>
             ) : (
-              <textarea
+              <Textarea
                 value={draft.answerText}
                 onChange={(e) => updateDraft(current.id, { answerText: e.target.value })}
                 rows={6}
                 placeholder="Your answer…"
-                className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
               />
             )}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-zinc-400">Confidence:</span>
+            <span className="text-xs text-fg-subtle">Confidence:</span>
             {(["GUESSING", "UNSURE", "CONFIDENT"] as const).map((level) => (
               <button
                 key={level}
                 type="button"
+                aria-pressed={draft.confidence === level}
                 onClick={() => updateDraft(current.id, { confidence: draft.confidence === level ? null : level })}
-                className={
-                  draft.confidence === level
-                    ? "rounded-full bg-zinc-900 px-2.5 py-1 text-xs text-white dark:bg-zinc-50 dark:text-zinc-900"
-                    : "rounded-full border border-zinc-300 px-2.5 py-1 text-xs text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                }
+                className={`focus-ring transition-standard rounded-full px-2.5 py-1 text-xs ${
+                  draft.confidence === level ? "bg-accent text-accent-fg" : "border border-border text-fg-muted hover:bg-surface-hover"
+                }`}
               >
-                {level === "CONFIDENT" ? "Confident" : level === "UNSURE" ? "Unsure" : "Guessing"}
+                {CONFIDENCE_LABEL[level]}
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {error && <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-4">
+          <InlineError message={error} />
+        </div>
+      )}
 
       <div className="mt-6 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => setIndex((i) => Math.max(0, i - 1))}
-          disabled={index === 0}
-          className="text-sm text-zinc-500 underline-offset-2 hover:underline disabled:opacity-30"
-        >
+        <Button variant="ghost" size="sm" onClick={() => setIndex((i) => Math.max(0, i - 1))} disabled={index === 0}>
           Previous
-        </button>
-        <button
-          type="button"
-          onClick={() => void saveAndAdvance()}
-          disabled={saving}
-          className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
+        </Button>
+        <Button variant="primary" loading={saving} onClick={() => void saveAndAdvance()}>
           {saving ? "Saving…" : "Save & Next"}
-        </button>
+        </Button>
       </div>
 
-      <div className="mt-6 border-t border-zinc-200 pt-4 text-center dark:border-zinc-800">
+      <div className="mt-6 border-t border-border pt-4 text-center">
         {confirmSubmit || unansweredCount === 0 ? (
           <div>
-            {unansweredCount > 0 && <p className="mb-2 text-sm text-amber-700 dark:text-amber-400">{unansweredCount} question{unansweredCount === 1 ? "" : "s"} unanswered.</p>}
-            <button
-              type="button"
-              onClick={() => void finalSubmit()}
-              disabled={submitting}
-              className="rounded-md bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-            >
-              {submitting ? "Submitting…" : "Submit Exam"}
-            </button>
-            {confirmSubmit && (
-              <button type="button" onClick={() => setConfirmSubmit(false)} className="ml-3 text-sm text-zinc-500 underline-offset-2 hover:underline">
-                Return to questions
-              </button>
+            {unansweredCount > 0 && (
+              <p className="mb-2 text-sm text-warning">
+                {unansweredCount} question{unansweredCount === 1 ? "" : "s"} unanswered.
+              </p>
             )}
+            <div className="flex items-center justify-center gap-3">
+              <Button variant="primary" loading={submitting} onClick={() => void finalSubmit()}>
+                {submitting ? "Submitting…" : "Submit Exam"}
+              </Button>
+              {confirmSubmit && (
+                <Button variant="ghost" size="sm" onClick={() => setConfirmSubmit(false)}>
+                  Return to questions
+                </Button>
+              )}
+            </div>
           </div>
         ) : (
-          <button type="button" onClick={() => setConfirmSubmit(true)} className="text-sm text-zinc-500 underline-offset-2 hover:underline">
+          <Button variant="ghost" size="sm" onClick={() => setConfirmSubmit(true)}>
             Finish and submit
-          </button>
+          </Button>
         )}
       </div>
     </div>

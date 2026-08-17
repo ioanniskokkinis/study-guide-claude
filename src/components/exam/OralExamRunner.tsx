@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { DEFAULT_PASSING_SCORE, DEFAULT_QUESTION_COUNT } from "@/lib/exam/config";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Textarea } from "@/components/ui/Input";
+import { InlineError } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/Skeleton";
 
 interface Turn {
   id: string;
@@ -126,13 +131,13 @@ export function OralExamRunner({ courseId }: { courseId: string }) {
   }
 
   if (load.status === "starting") {
-    return <p className="text-sm text-zinc-500">The examiner is getting ready…</p>;
+    return <LoadingState label="The examiner is getting ready" />;
   }
   if (load.status === "error") {
     return (
       <div>
-        <p className="text-sm text-red-600 dark:text-red-400">{load.message}</p>
-        <Link href={`/courses/${courseId}/exam`} className="mt-4 inline-block text-sm text-zinc-500 hover:underline">
+        <InlineError message={load.message} />
+        <Link href={`/courses/${courseId}/exam`} className="focus-ring mt-4 inline-block rounded text-sm text-fg-muted hover:underline">
           ← Back to exams
         </Link>
       </div>
@@ -140,15 +145,15 @@ export function OralExamRunner({ courseId }: { courseId: string }) {
   }
 
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
+    <Card padding="none" className="overflow-hidden">
       <div className="max-h-96 space-y-3 overflow-y-auto px-4 py-4">
         {load.turns.map((t) => (
           <div key={t.id} className={t.role === "STUDENT" ? "flex justify-end" : "flex justify-start"}>
             <div
               className={
                 t.role === "STUDENT"
-                  ? "max-w-[80%] rounded-lg bg-zinc-900 px-3 py-2 text-sm whitespace-pre-wrap text-white dark:bg-zinc-50 dark:text-zinc-900"
-                  : "max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm whitespace-pre-wrap text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
+                  ? "max-w-[80%] rounded-lg bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-accent-fg"
+                  : "max-w-[80%] rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm whitespace-pre-wrap text-fg"
               }
             >
               {t.content}
@@ -158,9 +163,9 @@ export function OralExamRunner({ courseId }: { courseId: string }) {
       </div>
 
       {load.status === "active" ? (
-        <div className="border-t border-zinc-200 px-4 py-4 dark:border-zinc-800">
+        <div className="border-t border-border px-4 py-4">
           <div className="flex gap-2">
-            <textarea
+            <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -172,31 +177,21 @@ export function OralExamRunner({ courseId }: { courseId: string }) {
               disabled={sending}
               rows={2}
               placeholder="Your answer…"
-              className="flex-1 resize-none rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950"
+              className="flex-1 resize-none"
             />
-            <button
-              type="button"
-              onClick={() => void respond()}
-              disabled={sending || input.trim().length === 0}
-              className="self-end rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-            >
+            <Button variant="primary" className="self-end" onClick={() => void respond()} disabled={sending || input.trim().length === 0}>
               Send
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
-        <div className="border-t border-zinc-200 px-4 py-4 text-center dark:border-zinc-800">
-          <p className="mb-3 text-sm text-zinc-500">The oral exam is complete.</p>
-          <button
-            type="button"
-            onClick={() => void finish(load.examId)}
-            disabled={sending}
-            className="rounded-md bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-          >
+        <div className="border-t border-border px-4 py-4 text-center">
+          <p className="mb-3 text-sm text-fg-muted">The oral exam is complete.</p>
+          <Button variant="primary" loading={sending} onClick={() => void finish(load.examId)}>
             {sending ? "Submitting…" : "Submit Exam"}
-          </button>
+          </Button>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

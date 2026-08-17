@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { InlineError } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/Skeleton";
 
 interface Reason {
   type: string;
@@ -120,31 +124,25 @@ export function AdaptiveDashboard({ courseId, concepts }: { courseId: string; co
   }
 
   if (load.status === "loading") {
-    return <p className="text-sm text-zinc-500">Thinking about what to study next…</p>;
+    return <LoadingState label="Thinking about what to study next" />;
   }
 
   if (load.status === "error") {
-    return <p className="text-sm text-red-600 dark:text-red-400">{load.message}</p>;
+    return <InlineError message={load.message} />;
   }
 
   if (!action) return null;
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-      <h2 className="text-xs font-medium tracking-wide text-zinc-400 uppercase">Next Best Action</h2>
-      <p className="mt-2 text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-        {ACTION_HEADLINE[action.actionType](action.conceptName)}
-      </p>
+    <Card>
+      <h2 className="text-xs font-medium tracking-wide text-fg-muted uppercase">Next Best Action</h2>
+      <p className="mt-2 text-xl font-semibold text-fg">{ACTION_HEADLINE[action.actionType](action.conceptName)}</p>
 
-      <button
-        type="button"
-        onClick={() => setShowWhy((v) => !v)}
-        className="mt-3 text-sm text-zinc-500 underline-offset-2 hover:underline"
-      >
+      <button type="button" onClick={() => setShowWhy((v) => !v)} className="focus-ring mt-3 rounded text-sm text-fg-muted hover:underline">
         {showWhy ? "Hide why" : "Why?"}
       </button>
       {showWhy && (
-        <div className="mt-2 rounded-md bg-zinc-50 p-3 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+        <div className="mt-2 rounded-md bg-surface-muted p-3 text-sm text-fg-muted">
           <p>{action.reason.message}</p>
           {action.factors.length > 0 && (
             <ul className="mt-2 list-inside list-disc space-y-0.5">
@@ -156,32 +154,26 @@ export function AdaptiveDashboard({ courseId, concepts }: { courseId: string; co
         </div>
       )}
 
-      <p className="mt-3 text-sm text-zinc-500">Estimated time: {action.estimatedDurationMinutes} min</p>
+      <p className="mt-3 text-sm text-fg-muted">Estimated time: {action.estimatedDurationMinutes} min</p>
 
-      {actionError && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{actionError}</p>}
+      {actionError && (
+        <div className="mt-3">
+          <InlineError message={actionError} />
+        </div>
+      )}
 
       <div className="mt-5 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={start}
-          disabled={isBusy}
-          className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
+        <Button variant="primary" loading={isBusy} onClick={start}>
           {isBusy ? "Starting…" : "Start"}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowOverride((v) => !v)}
-          disabled={isBusy}
-          className="text-sm text-zinc-500 underline-offset-2 hover:underline disabled:opacity-50"
-        >
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setShowOverride((v) => !v)} disabled={isBusy}>
           Study something else
-        </button>
+        </Button>
       </div>
 
       {showOverride && (
-        <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-          <p className="text-sm text-zinc-500">Pick a concept to study instead:</p>
+        <div className="mt-4 border-t border-border pt-4">
+          <p className="text-sm text-fg-muted">Pick a concept to study instead:</p>
           <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
             {concepts.map((c) => (
               <li key={c.id}>
@@ -189,18 +181,16 @@ export function AdaptiveDashboard({ courseId, concepts }: { courseId: string; co
                   type="button"
                   onClick={() => startWithConcept(c.id)}
                   disabled={isBusy}
-                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-900"
+                  className="focus-ring transition-standard flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-hover disabled:opacity-50"
                 >
-                  <span>{c.name}</span>
-                  <span className="text-xs text-zinc-400">
-                    {c.exposureCount > 0 ? `${Math.round(c.mastery * 100)}%` : "unassessed"}
-                  </span>
+                  <span className="text-fg">{c.name}</span>
+                  <span className="text-xs text-fg-subtle">{c.exposureCount > 0 ? `${Math.round(c.mastery * 100)}%` : "unassessed"}</span>
                 </button>
               </li>
             ))}
           </ul>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

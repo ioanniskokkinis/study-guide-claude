@@ -6,6 +6,10 @@ import { getDevelopingConcepts, getKnowledgeSnapshot, getRecentMistakes } from "
 import { KnowledgeGraphProgress } from "@/components/knowledge/KnowledgeGraphProgress";
 import { ConceptGraph } from "@/components/knowledge/ConceptGraph";
 import { MyKnowledgeSection } from "@/components/knowledge/MyKnowledgeSection";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 export const dynamic = "force-dynamic";
 
@@ -47,11 +51,11 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
   ]);
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <Link href={`/courses/${courseId}`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${courseId}`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← {summary.courseTitle}
       </Link>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Knowledge Graph</h1>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">Knowledge Graph</h1>
 
       <div className="mt-4">
         <KnowledgeGraphProgress
@@ -67,30 +71,20 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
       </div>
 
       {knowledgeSnapshot && (
-        <MyKnowledgeSection
-          snapshot={knowledgeSnapshot}
-          developingConcepts={developingConcepts ?? []}
-          mistakes={mistakes ?? []}
-        />
+        <MyKnowledgeSection snapshot={knowledgeSnapshot} developingConcepts={developingConcepts ?? []} mistakes={mistakes ?? []} />
       )}
 
-      <div className="mt-8">
-        <h2 className="text-sm font-medium text-zinc-500">Graph</h2>
-        <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-10">
+        <SectionHeader title="Graph" />
+        <div className="mt-3 flex flex-wrap gap-2">
           {FILTERS.map((filter) => {
             const href = `?type=${filter.value}${q ? `&q=${encodeURIComponent(q)}` : ""}`;
             const isActive = filter.value === activeFilter;
             return (
-              <Link
-                key={filter.value}
-                href={href}
-                className={`rounded-full px-3 py-1 text-xs font-medium ${
-                  isActive
-                    ? "bg-zinc-900 text-white dark:bg-zinc-50 dark:text-zinc-900"
-                    : "border border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
-                }`}
-              >
-                {filter.label}
+              <Link key={filter.value} href={href}>
+                <Button variant={isActive ? "primary" : "secondary"} size="sm">
+                  {filter.label}
+                </Button>
               </Link>
             );
           })}
@@ -100,51 +94,41 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
         </div>
       </div>
 
-      <div className="mt-8">
-        <h2 className="text-sm font-medium text-zinc-500">Concepts</h2>
-        <form className="mt-2 flex gap-2" action={`/courses/${courseId}/knowledge`}>
+      <div className="mt-10">
+        <SectionHeader title="Concepts" />
+        <form className="mt-3 flex gap-2" action={`/courses/${courseId}/knowledge`}>
           {activeFilter !== "all" && <input type="hidden" name="type" value={activeFilter} />}
-          <input
-            type="text"
-            name="q"
-            defaultValue={q}
-            placeholder="Search concepts…"
-            className="w-full max-w-sm rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-transparent"
-          />
-          <button
-            type="submit"
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-          >
+          <Input type="text" name="q" defaultValue={q} placeholder="Search concepts…" className="max-w-sm" />
+          <Button type="submit" variant="secondary">
             Search
-          </button>
+          </Button>
         </form>
 
         {!conceptResult || conceptResult.concepts.length === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500">
-            {summary.conceptCount === 0
-              ? "No concepts yet — build the knowledge graph to extract them from this course's documents."
-              : "No concepts match your search."}
-          </p>
+          <div className="mt-4">
+            <EmptyState
+              icon="🔎"
+              title={summary.conceptCount === 0 ? "No concepts yet" : "No concepts match your search"}
+              description={
+                summary.conceptCount === 0 ? "Build the knowledge graph to extract concepts from this course's documents." : undefined
+              }
+            />
+          </div>
         ) : (
-          <ul className="mt-4 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          <ul className="mt-4 divide-y divide-border rounded-lg border border-border">
             {conceptResult.concepts.map((concept) => (
               <li key={concept.id} className="flex items-center justify-between gap-4 px-4 py-3">
                 <div className="min-w-0">
-                  <Link
-                    href={`/concepts/${concept.id}`}
-                    className="font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
-                  >
+                  <Link href={`/concepts/${concept.id}`} className="focus-ring rounded font-medium text-fg underline-offset-2 hover:underline">
                     {concept.name}
                   </Link>
-                  {concept.description && (
-                    <p className="truncate text-xs text-zinc-400">{concept.description}</p>
-                  )}
+                  {concept.description && <p className="truncate text-xs text-fg-subtle">{concept.description}</p>}
                 </div>
-                <div className="shrink-0 text-right text-xs text-zinc-400">
+                <div className="shrink-0 text-right text-xs text-fg-subtle">
                   <p>Difficulty {concept.difficulty}/5</p>
                   <p>
-                    {concept.sourceCount} source{concept.sourceCount === 1 ? "" : "s"} ·{" "}
-                    {concept.relationshipCount} link{concept.relationshipCount === 1 ? "" : "s"}
+                    {concept.sourceCount} source{concept.sourceCount === 1 ? "" : "s"} · {concept.relationshipCount} link
+                    {concept.relationshipCount === 1 ? "" : "s"}
                   </p>
                 </div>
               </li>

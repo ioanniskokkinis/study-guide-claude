@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
 
 export function MistakeResolveButton({ mistakeId }: { mistakeId: string }) {
   const router = useRouter();
@@ -18,13 +19,8 @@ export function MistakeResolveButton({ mistakeId }: { mistakeId: string }) {
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleResolve}
-      disabled={isResolving}
-      className="text-sm font-medium text-zinc-600 hover:underline disabled:opacity-50 dark:text-zinc-400"
-    >
+    <Button variant="ghost" size="sm" loading={isResolving} onClick={handleResolve}>
       {isResolving ? "Marking reviewed…" : "Mark reviewed"}
-    </button>
+    </Button>
   );
 }

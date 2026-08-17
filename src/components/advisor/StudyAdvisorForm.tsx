@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Input";
 
 interface FolderOption {
   id: string;
@@ -117,154 +119,131 @@ export function StudyAdvisorForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
-      <div>
-        <label htmlFor="goal" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50">
-          Goal
-        </label>
-        <input
-          id="goal"
-          type="text"
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          placeholder="e.g. Pass my Biology exam"
-          className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
+    <div>
+      <form onSubmit={handleSubmit} className="space-y-6 rounded-lg border border-border p-5">
         <div>
-          <label htmlFor="deadline" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            Deadline (optional)
+          <label htmlFor="goal" className="block text-sm font-medium text-fg">
+            Goal
           </label>
-          <input
-            id="deadline"
-            type="date"
-            value={deadline}
-            onChange={(e) => setDeadline(e.target.value)}
-            className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-          />
+          <Input id="goal" type="text" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. Pass my Biology exam" className="mt-1" />
         </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="deadline" className="block text-sm font-medium text-fg">
+              Deadline (optional)
+            </label>
+            <Input id="deadline" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} className="mt-1" />
+          </div>
+          <div>
+            <label htmlFor="target-score" className="block text-sm font-medium text-fg">
+              Target score % (optional)
+            </label>
+            <Input
+              id="target-score"
+              type="number"
+              min={0}
+              max={100}
+              value={targetScorePercent}
+              onChange={(e) => setTargetScorePercent(e.target.value)}
+              className="mt-1"
+            />
+          </div>
+        </div>
+
         <div>
-          <label htmlFor="target-score" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            Target score % (optional)
+          <label htmlFor="minutes-per-day" className="block text-sm font-medium text-fg">
+            Minutes per day
           </label>
-          <input
-            id="target-score"
+          <Input
+            id="minutes-per-day"
             type="number"
-            min={0}
-            max={100}
-            value={targetScorePercent}
-            onChange={(e) => setTargetScorePercent(e.target.value)}
-            className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+            min={5}
+            max={600}
+            value={minutesPerDay}
+            onChange={(e) => setMinutesPerDay(Number(e.target.value))}
+            className="mt-1 w-32"
           />
         </div>
-      </div>
 
-      <div>
-        <label htmlFor="minutes-per-day" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50">
-          Minutes per day
-        </label>
-        <input
-          id="minutes-per-day"
-          type="number"
-          min={5}
-          max={600}
-          value={minutesPerDay}
-          onChange={(e) => setMinutesPerDay(Number(e.target.value))}
-          className="mt-1 w-32 rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-        />
-      </div>
-
-      <div>
-        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Study days (optional — leave blank for every day)</p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {WEEKDAYS.map((day) => (
-            <button
-              key={day.value}
-              type="button"
-              onClick={() => toggleDay(day.value)}
-              aria-pressed={studyDays.has(day.value)}
-              className={
-                studyDays.has(day.value)
-                  ? "rounded-full bg-zinc-900 px-3 py-1 text-xs font-medium text-white dark:bg-zinc-50 dark:text-zinc-900"
-                  : "rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
-              }
-            >
-              {day.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Study material</p>
-        <div className="mt-2 flex flex-wrap gap-2 text-sm">
-          {(["COURSE", "FOLDER", "DOCUMENTS"] as ScopeType[]).map((type) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => setScopeType(type)}
-              aria-pressed={scopeType === type}
-              className={
-                scopeType === type
-                  ? "rounded-md bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-zinc-50 dark:text-zinc-900"
-                  : "rounded-md border border-zinc-300 px-3 py-1.5 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
-              }
-            >
-              {type === "COURSE" ? "Entire course" : type === "FOLDER" ? "One folder" : "Selected documents"}
-            </button>
-          ))}
-        </div>
-
-        {scopeType === "FOLDER" && (
-          <select
-            value={folderId}
-            onChange={(e) => setFolderId(e.target.value)}
-            className="mt-3 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-          >
-            {folders.length === 0 ? (
-              <option value="">No folders yet</option>
-            ) : (
-              folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))
-            )}
-          </select>
-        )}
-
-        {scopeType === "DOCUMENTS" && (
-          <ul className="mt-3 max-h-48 space-y-1 overflow-auto rounded-md border border-zinc-200 p-2 text-sm dark:border-zinc-800">
-            {documents.map((doc) => (
-              <li key={doc.id}>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={documentIds.has(doc.id)} onChange={() => toggleDocument(doc.id)} />
-                  <span className="truncate">{doc.originalFilename}</span>
-                </label>
-              </li>
+        <div>
+          <p className="text-sm font-medium text-fg">Study days (optional — leave blank for every day)</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {WEEKDAYS.map((day) => (
+              <button
+                key={day.value}
+                type="button"
+                onClick={() => toggleDay(day.value)}
+                aria-pressed={studyDays.has(day.value)}
+                className={`focus-ring transition-standard rounded-full px-3 py-1 text-xs font-medium ${
+                  studyDays.has(day.value) ? "bg-accent text-accent-fg" : "border border-border text-fg-muted hover:bg-surface-hover"
+                }`}
+              >
+                {day.label}
+              </button>
             ))}
-          </ul>
-        )}
-      </div>
-
-      {error && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          <p>{error}</p>
-          <a href={`/courses/${courseId}/knowledge`} className="mt-1 inline-block underline underline-offset-2">
-            Check the Knowledge Graph
-          </a>
+          </div>
         </div>
-      )}
 
-      <button
-        type="submit"
-        disabled={submitting}
-        className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-      >
-        {submitting ? "Building your roadmap…" : "Build my roadmap"}
-      </button>
-    </form>
+        <div>
+          <p className="text-sm font-medium text-fg">Study material</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-sm">
+            {(["COURSE", "FOLDER", "DOCUMENTS"] as ScopeType[]).map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => setScopeType(type)}
+                aria-pressed={scopeType === type}
+                className={`focus-ring transition-standard rounded-md px-3 py-1.5 font-medium ${
+                  scopeType === type ? "bg-accent text-accent-fg" : "border border-border text-fg-muted hover:bg-surface-hover"
+                }`}
+              >
+                {type === "COURSE" ? "Entire course" : type === "FOLDER" ? "One folder" : "Selected documents"}
+              </button>
+            ))}
+          </div>
+
+          {scopeType === "FOLDER" && (
+            <Select value={folderId} onChange={(e) => setFolderId(e.target.value)} className="mt-3">
+              {folders.length === 0 ? (
+                <option value="">No folders yet</option>
+              ) : (
+                folders.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))
+              )}
+            </Select>
+          )}
+
+          {scopeType === "DOCUMENTS" && (
+            <ul className="mt-3 max-h-48 space-y-1 overflow-auto rounded-md border border-border p-2 text-sm">
+              {documents.map((doc) => (
+                <li key={doc.id}>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={documentIds.has(doc.id)} onChange={() => toggleDocument(doc.id)} className="focus-ring accent-accent" />
+                    <span className="truncate">{doc.originalFilename}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {error && (
+          <div className="rounded-lg border border-danger-border bg-danger-bg px-4 py-3.5 text-sm">
+            <p className="font-medium text-danger-fg">{error}</p>
+            <a href={`/courses/${courseId}/knowledge`} className="focus-ring mt-1 inline-block rounded text-danger-fg underline underline-offset-2">
+              Check the Knowledge Graph
+            </a>
+          </div>
+        )}
+
+        <Button type="submit" variant="primary" size="lg" loading={submitting} className="w-full">
+          {submitting ? "Building your roadmap…" : "Build my roadmap"}
+        </Button>
+      </form>
+    </div>
   );
 }

@@ -20,18 +20,18 @@ export default async function ExamResultPage({ params }: PageProps) {
   const result = await getExamResult(examId, user.id);
   if (!result) {
     return (
-      <div className="mx-auto max-w-2xl px-6 py-10">
-        <Link href={`/courses/${course.id}/exam`} className="text-sm text-zinc-500 hover:underline">
+      <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+        <Link href={`/courses/${course.id}/exam`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
           ← Exam
         </Link>
-        <p className="mt-6 text-sm text-zinc-500">This exam hasn&rsquo;t been graded yet.</p>
+        <p className="mt-6 text-sm text-fg-muted">This exam hasn&rsquo;t been graded yet.</p>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <Link href={`/courses/${course.id}/exam`} className="text-sm text-zinc-500 hover:underline">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href={`/courses/${course.id}/exam`} className="focus-ring text-sm text-fg-muted hover:text-fg hover:underline">
         ← Exam
       </Link>
       <ExamResultView courseId={course.id} result={result} />

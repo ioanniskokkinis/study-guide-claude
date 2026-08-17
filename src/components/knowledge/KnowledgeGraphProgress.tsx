@@ -2,6 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { InlineError } from "@/components/ui/ErrorState";
+import { knowledgeStatusLabel, knowledgeStatusTone } from "./status-label";
 
 interface KnowledgeGraphProgressProps {
   courseId: string;
@@ -111,32 +117,29 @@ export function KnowledgeGraphProgress({
   }
 
   const isRunning = RUNNING_STATUSES.has(status);
+  const statusInfo = knowledgeStatusLabel(status);
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <Card>
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Knowledge Base</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-fg">Knowledge Base</h2>
+          {!isRunning && <Badge tone={knowledgeStatusTone(status)}>{statusInfo.label}</Badge>}
+        </div>
         {!isRunning && (
-          <button
-            type="button"
-            onClick={handleStart}
-            disabled={starting}
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-70 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
+          <Button variant="primary" size="sm" loading={starting} onClick={handleStart}>
             {starting ? "Starting…" : status === "NOT_STARTED" ? "Build Knowledge Graph" : "Rebuild"}
-          </button>
+          </Button>
         )}
       </div>
 
       {isRunning && (
-        <div className="mt-3">
-          <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
-            <div className="h-full bg-zinc-900 transition-all dark:bg-zinc-50" style={{ width: `${progress}%` }} />
-          </div>
-          <p className="mt-1 text-xs text-zinc-500">
+        <div className="mt-4">
+          <ProgressBar value={progress / 100} label="Knowledge graph build progress" />
+          <p className="mt-1.5 text-xs text-fg-muted">
             {progress}% — {message ?? "Working…"}
           </p>
-          <ul className="mt-3 space-y-1 text-xs text-zinc-500">
+          <ul className="mt-3 space-y-1 text-xs text-fg-muted">
             {CHECKLIST.map((item, i) => (
               <li key={item.label}>
                 {checklistIcon(progress, status, item.threshold, CHECKLIST[i - 1]?.threshold ?? 0)} {item.label}
@@ -148,33 +151,35 @@ export function KnowledgeGraphProgress({
 
       {status === "FAILED" && (
         <div className="mt-3">
-          <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+          <p className="text-sm font-medium text-warning">
             {conceptCount > 0 ? "⚠ Knowledge Base partially built" : "⚠ Knowledge Base could not be built"}
           </p>
-          {error && <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{error}</p>}
+          {error && (
+            <div className="mt-1">
+              <InlineError message={error} />
+            </div>
+          )}
         </div>
       )}
 
-      {status === "READY" && error && (
-        <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">⚠ Knowledge Base partially built — {error}</p>
-      )}
+      {status === "READY" && error && <p className="mt-3 text-sm text-warning">⚠ Knowledge Base partially built — {error}</p>}
 
       {(status === "READY" || status === "FAILED") && (
         <dl className="mt-4 grid grid-cols-3 gap-4 text-center">
           <div>
-            <dt className="text-xs text-zinc-400">Concepts</dt>
-            <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{conceptCount}</dd>
+            <dt className="text-xs text-fg-subtle">Concepts</dt>
+            <dd className="text-lg font-semibold text-fg">{conceptCount}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-400">Relationships</dt>
-            <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{relationshipCount}</dd>
+            <dt className="text-xs text-fg-subtle">Relationships</dt>
+            <dd className="text-lg font-semibold text-fg">{relationshipCount}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-400">Prerequisites</dt>
-            <dd className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{prerequisiteCount}</dd>
+            <dt className="text-xs text-fg-subtle">Prerequisites</dt>
+            <dd className="text-lg font-semibold text-fg">{prerequisiteCount}</dd>
           </div>
         </dl>
       )}
-    </div>
+    </Card>
   );
 }

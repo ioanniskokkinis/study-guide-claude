@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
 
 export function DeleteCourseButton({ courseId, redirectTo }: { courseId: string; redirectTo?: string }) {
   const router = useRouter();
@@ -25,13 +26,8 @@ export function DeleteCourseButton({ courseId, redirectTo }: { courseId: string;
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleDelete}
-      disabled={isDeleting}
-      className="text-sm font-medium text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
-    >
+    <Button variant="ghost" size="sm" loading={isDeleting} onClick={handleDelete} className="text-danger hover:bg-danger-bg">
       {isDeleting ? "Deleting…" : "Delete"}
-    </button>
+    </Button>
   );
 }

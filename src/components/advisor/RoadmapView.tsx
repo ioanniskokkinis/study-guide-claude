@@ -8,15 +8,28 @@ import type { HealthResult, RoadmapHealth } from "@/lib/advisor/health";
 import type { AdaptationCheckResult } from "@/lib/advisor/change-detection";
 import type { NextBestActionResult } from "@/lib/advisor/next-action";
 import type { RoadmapChangeSummary } from "@/lib/advisor/diff";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { InlineError } from "@/components/ui/ErrorState";
 
 type Roadmap = NonNullable<Awaited<ReturnType<typeof getRoadmap>>>;
 type TodayPlan = NonNullable<Awaited<ReturnType<typeof getTodayPlan>>>;
 
-const HEALTH_COPY: Record<RoadmapHealth, { label: string; className: string }> = {
-  ON_TRACK: { label: "Your plan is on track.", className: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
-  AT_RISK: { label: "You're slightly behind schedule.", className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
-  BEHIND: { label: "You're behind schedule. We've adjusted the next few sessions.", className: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" },
-  INSUFFICIENT_DATA: { label: "Not enough data yet to tell if you're on track.", className: "bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400" },
+const HEALTH_LABEL: Record<RoadmapHealth, string> = {
+  ON_TRACK: "Your plan is on track.",
+  AT_RISK: "You're slightly behind schedule.",
+  BEHIND: "You're behind schedule. We've adjusted the next few sessions.",
+  INSUFFICIENT_DATA: "Not enough data yet to tell if you're on track.",
+};
+
+const HEALTH_TONE: Record<RoadmapHealth, BadgeTone> = {
+  ON_TRACK: "success",
+  AT_RISK: "warning",
+  BEHIND: "danger",
+  INSUFFICIENT_DATA: "neutral",
 };
 
 const NEXT_ACTION_LABEL: Record<string, string> = {
@@ -166,86 +179,69 @@ export function RoadmapView({
     <div className="mt-2">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">{roadmap.title}</h1>
-          <p className="mt-1 text-sm text-zinc-500">{roadmap.goal}</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-fg">{roadmap.title}</h1>
+          <p className="mt-1 text-sm text-fg-muted">{roadmap.goal}</p>
         </div>
         <div className="flex shrink-0 gap-2">
           {roadmap.status === "ACTIVE" && (
             <>
-              <button
-                type="button"
-                onClick={handlePause}
-                disabled={pausing}
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-              >
+              <Button variant="secondary" size="sm" onClick={handlePause} disabled={pausing}>
                 Pause
-              </button>
-              <button
-                type="button"
-                onClick={handleReplan}
-                disabled={replanning}
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-              >
+              </Button>
+              <Button variant="secondary" size="sm" loading={replanning} onClick={handleReplan}>
                 {replanning ? "Replanning…" : "Replan"}
-              </button>
+              </Button>
             </>
           )}
           {roadmap.status === "PAUSED" && (
-            <button
-              type="button"
-              onClick={handleResume}
-              disabled={pausing}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50 dark:hover:bg-zinc-900"
-            >
+            <Button variant="secondary" size="sm" loading={pausing} onClick={handleResume}>
               {pausing ? "Resuming…" : "Resume"}
-            </button>
+            </Button>
           )}
-          <a
-            href={`/api/roadmaps/${roadmap.id}/pdf`}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
-            Export PDF
+          <a href={`/api/roadmaps/${roadmap.id}/pdf`} target="_blank" rel="noreferrer">
+            <Button variant="primary" size="sm">
+              Export PDF
+            </Button>
           </a>
         </div>
       </div>
-      {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
-      {resumeNote && <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{resumeNote}</p>}
+      {error && (
+        <div className="mt-2">
+          <InlineError message={error} />
+        </div>
+      )}
+      {resumeNote && <p className="mt-2 text-sm text-fg-muted">{resumeNote}</p>}
 
-      <span className={`mt-4 inline-block rounded-full px-3 py-1 text-xs font-medium ${HEALTH_COPY[health.health].className}`}>
-        {HEALTH_COPY[health.health].label}
-      </span>
+      <div className="mt-4">
+        <Badge tone={HEALTH_TONE[health.health]}>{HEALTH_LABEL[health.health]}</Badge>
+      </div>
 
       {adaptation?.needed && (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950">
-          <p className="font-medium text-amber-900 dark:text-amber-200">Your study plan may need an update.</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-amber-800 dark:text-amber-300">
+        <Card className="mt-4 border-warning-border bg-warning-bg">
+          <p className="font-medium text-warning-fg">Your study plan may need an update.</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-warning-fg/90">
             {adaptation.details.map((detail, i) => (
               <li key={i}>{detail}</li>
             ))}
           </ul>
           {roadmap.status === "ACTIVE" && (
-            <button
-              type="button"
-              onClick={handleReplan}
-              disabled={replanning}
-              className="mt-3 rounded-md bg-amber-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50 dark:bg-amber-200 dark:text-amber-950"
-            >
-              {replanning ? "Updating…" : "Review and update my plan"}
-            </button>
+            <div className="mt-3">
+              <Button variant="primary" size="sm" loading={replanning} onClick={handleReplan}>
+                {replanning ? "Updating…" : "Review and update my plan"}
+              </Button>
+            </div>
           )}
-        </div>
+        </Card>
       )}
 
       {changeSummary && (changeSummary.removed.length > 0 || changeSummary.movedEarlier.length > 0 || changeSummary.added.length > 0) && (
-        <div className="mt-4 rounded-lg border border-zinc-200 p-4 text-sm dark:border-zinc-800">
-          <p className="font-medium text-zinc-900 dark:text-zinc-50">What changed in this plan</p>
-          {roadmap.adaptationReason && <p className="mt-1 text-zinc-500">{roadmap.adaptationReason}</p>}
+        <Card className="mt-4">
+          <p className="font-medium text-fg">What changed in this plan</p>
+          {roadmap.adaptationReason && <p className="mt-1 text-sm text-fg-muted">{roadmap.adaptationReason}</p>}
           {changeSummary.added.length > 0 && (
             <div className="mt-2">
-              <p className="text-xs text-zinc-400">Added</p>
-              <ul className="list-disc space-y-0.5 pl-5 text-zinc-700 dark:text-zinc-300">
+              <p className="text-xs text-fg-subtle">Added</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-sm text-fg">
                 {changeSummary.added.map((line, i) => (
                   <li key={i}>{line}</li>
                 ))}
@@ -254,8 +250,8 @@ export function RoadmapView({
           )}
           {changeSummary.movedEarlier.length > 0 && (
             <div className="mt-2">
-              <p className="text-xs text-zinc-400">Moved earlier</p>
-              <ul className="list-disc space-y-0.5 pl-5 text-zinc-700 dark:text-zinc-300">
+              <p className="text-xs text-fg-subtle">Moved earlier</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-sm text-fg">
                 {changeSummary.movedEarlier.map((line, i) => (
                   <li key={i}>{line}</li>
                 ))}
@@ -264,168 +260,174 @@ export function RoadmapView({
           )}
           {changeSummary.removed.length > 0 && (
             <div className="mt-2">
-              <p className="text-xs text-zinc-400">No longer needed</p>
-              <ul className="list-disc space-y-0.5 pl-5 text-zinc-700 dark:text-zinc-300">
+              <p className="text-xs text-fg-subtle">No longer needed</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-sm text-fg">
                 {changeSummary.removed.map((line, i) => (
                   <li key={i}>{line}</li>
                 ))}
               </ul>
             </div>
           )}
-        </div>
+        </Card>
       )}
 
-      <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border border-zinc-200 p-4 text-sm sm:grid-cols-4 dark:border-zinc-800">
-        <div>
-          <dt className="text-xs text-zinc-400">Deadline</dt>
-          <dd className="mt-0.5 font-medium text-zinc-900 dark:text-zinc-50">{roadmap.deadline ? formatDate(roadmap.deadline) : "None set"}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-zinc-400">Study material</dt>
-          <dd className="mt-0.5 truncate font-medium text-zinc-900 dark:text-zinc-50">{scopeLabel}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-zinc-400">Progress</dt>
-          <dd className="mt-0.5 font-medium text-zinc-900 dark:text-zinc-50">{pct(progress.overallProgressPercent)}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-zinc-400">Current knowledge</dt>
-          <dd className="mt-0.5 font-medium text-zinc-900 dark:text-zinc-50">{pct(progress.currentAverageMasteryPercent)} mastery</dd>
-        </div>
-      </dl>
+      <Card className="mt-6">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+          <div>
+            <dt className="text-xs text-fg-subtle">Deadline</dt>
+            <dd className="mt-0.5 font-medium text-fg">{roadmap.deadline ? formatDate(roadmap.deadline) : "None set"}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-fg-subtle">Study material</dt>
+            <dd className="mt-0.5 truncate font-medium text-fg">{scopeLabel}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-fg-subtle">Progress</dt>
+            <dd className="mt-0.5 font-medium text-fg">{pct(progress.overallProgressPercent)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-fg-subtle">Current knowledge</dt>
+            <dd className="mt-0.5 font-medium text-fg">{pct(progress.currentAverageMasteryPercent)} mastery</dd>
+          </div>
+        </dl>
+      </Card>
 
-      <div className="mt-2">
-        <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
-          <div className="h-full bg-zinc-900 dark:bg-zinc-50" style={{ width: pct(progress.overallProgressPercent) }} />
-        </div>
-        <p className="mt-1 text-xs text-zinc-400">
+      <div className="mt-3">
+        <ProgressBar value={progress.overallProgressPercent} label="Roadmap progress" />
+        <p className="mt-1 text-xs text-fg-subtle">
           {progress.completedItems}/{progress.totalItems} items complete
           {progress.overdueItems > 0 ? ` · ${progress.overdueItems} overdue` : ""}
         </p>
       </div>
 
-      {roadmap.summary && <p className="mt-6 text-sm text-zinc-700 dark:text-zinc-300">{roadmap.summary}</p>}
+      {roadmap.summary && <p className="mt-6 text-sm text-fg">{roadmap.summary}</p>}
 
-      <h2 className="mt-8 text-sm font-medium text-zinc-500">Today&rsquo;s plan</h2>
-      {todayPlan.today.length === 0 && todayPlan.overdue.length === 0 ? (
-        <p className="mt-2 text-sm text-zinc-500">Nothing scheduled today. Enjoy the rest.</p>
-      ) : (
-        <ul className="mt-2 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-          {[...todayPlan.overdue, ...todayPlan.today].map((item) => (
-            <li key={item.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-              <input
-                type="checkbox"
-                checked={item.status === "COMPLETED"}
-                disabled={pendingItemId === item.id}
-                onChange={() => markItem(item.id, item.status === "COMPLETED" ? "PENDING" : "COMPLETED")}
-                aria-label={`Mark "${item.title}" complete`}
-              />
-              <div className="min-w-0 flex-1">
-                <p className={item.status === "COMPLETED" ? "truncate font-medium text-zinc-400 line-through" : "truncate font-medium text-zinc-900 dark:text-zinc-50"}>
-                  {ACTION_LABEL[item.action] ?? item.action}: {item.title}
-                </p>
-                <p className="truncate text-xs text-zinc-400">
-                  {item.estimatedMinutes} min
-                  {item.scheduledDate && new Date(item.scheduledDate) < new Date(new Date().setHours(0, 0, 0, 0)) ? " · overdue" : ""}
-                  {item.reason ? ` — ${item.reason}` : ""}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="mt-8">
+        <SectionHeader title="Today's plan" />
+        {todayPlan.today.length === 0 && todayPlan.overdue.length === 0 ? (
+          <p className="mt-2 text-sm text-fg-muted">Nothing scheduled today. Enjoy the rest.</p>
+        ) : (
+          <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
+            {[...todayPlan.overdue, ...todayPlan.today].map((item) => (
+              <li key={item.id} className="flex items-center gap-3 px-4 py-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={item.status === "COMPLETED"}
+                  disabled={pendingItemId === item.id}
+                  onChange={() => markItem(item.id, item.status === "COMPLETED" ? "PENDING" : "COMPLETED")}
+                  aria-label={`Mark "${item.title}" complete`}
+                  className="focus-ring accent-accent"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className={item.status === "COMPLETED" ? "truncate font-medium text-fg-subtle line-through" : "truncate font-medium text-fg"}>
+                    {ACTION_LABEL[item.action] ?? item.action}: {item.title}
+                  </p>
+                  <p className="truncate text-xs text-fg-subtle">
+                    {item.estimatedMinutes} min
+                    {item.scheduledDate && new Date(item.scheduledDate) < new Date(new Date().setHours(0, 0, 0, 0)) ? " · overdue" : ""}
+                    {item.reason ? ` — ${item.reason}` : ""}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
-      <div className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <Card className="mt-6">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Not sure where to start?</p>
-          <button
-            type="button"
-            onClick={handleWhatsNext}
-            disabled={loadingNextAction}
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
+          <p className="text-sm font-medium text-fg">Not sure where to start?</p>
+          <Button variant="primary" size="sm" loading={loadingNextAction} onClick={handleWhatsNext}>
             {loadingNextAction ? "Thinking…" : "What should I study now?"}
-          </button>
+          </Button>
         </div>
         {nextAction && (
           <div className="mt-3 text-sm">
             {nextAction.type === "NONE" ? (
-              <p className="text-zinc-500">{nextAction.reason}</p>
+              <p className="text-fg-muted">{nextAction.reason}</p>
             ) : (
               <>
-                <p className="font-medium text-zinc-900 dark:text-zinc-50">
+                <p className="font-medium text-fg">
                   {NEXT_ACTION_LABEL[nextAction.type] ?? nextAction.type}: {nextAction.conceptName}
                 </p>
-                <p className="mt-0.5 text-xs text-zinc-400">
+                <p className="mt-0.5 text-xs text-fg-subtle">
                   {nextAction.durationMinutes} min — {nextAction.reason}
                 </p>
               </>
             )}
           </div>
         )}
+      </Card>
+
+      <div className="mt-8">
+        <SectionHeader title="Priority topics" />
+        <ul className="mt-2 space-y-2">
+          {priorityItems.map((item) => (
+            <li key={item.id}>
+              <Card padding="sm">
+                <p className="font-medium text-fg">{item.title}</p>
+                <p className="mt-0.5 text-xs text-fg-subtle">{item.reason}</p>
+              </Card>
+            </li>
+          ))}
+        </ul>
       </div>
 
-      <h2 className="mt-8 text-sm font-medium text-zinc-500">Priority topics</h2>
-      <ul className="mt-2 space-y-2">
-        {priorityItems.map((item) => (
-          <li key={item.id} className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-            <p className="font-medium text-zinc-900 dark:text-zinc-50">{item.title}</p>
-            <p className="mt-0.5 text-xs text-zinc-400">{item.reason}</p>
-          </li>
-        ))}
-      </ul>
-
-      <h2 className="mt-8 text-sm font-medium text-zinc-500">Weekly roadmap</h2>
-      <ul className="mt-2 space-y-3">
-        {roadmap.weeks.map((week) => (
-          <li key={week.id} className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-            <div className="flex items-center justify-between">
-              <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                Week {week.weekNumber} · {formatDate(week.startDate)}–{formatDate(week.endDate)}
-              </p>
-              <span className="text-xs text-zinc-400">{week.estimatedMinutes} min</span>
-            </div>
-            <p className="mt-1 text-zinc-600 dark:text-zinc-300">{week.focusSummary}</p>
-            <p className="mt-1 text-xs text-zinc-400">{week.reason}</p>
-          </li>
-        ))}
-      </ul>
+      <div className="mt-8">
+        <SectionHeader title="Weekly roadmap" />
+        <ul className="mt-2 space-y-3">
+          {roadmap.weeks.map((week) => (
+            <li key={week.id}>
+              <Card padding="sm">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium text-fg">
+                    Week {week.weekNumber} · {formatDate(week.startDate)}–{formatDate(week.endDate)}
+                  </p>
+                  <span className="text-xs text-fg-subtle">{week.estimatedMinutes} min</span>
+                </div>
+                <p className="mt-1 text-sm text-fg-muted">{week.focusSummary}</p>
+                <p className="mt-1 text-xs text-fg-subtle">{week.reason}</p>
+              </Card>
+            </li>
+          ))}
+        </ul>
+      </div>
 
       {milestones.length > 0 && (
-        <>
-          <h2 className="mt-8 text-sm font-medium text-zinc-500">Milestones</h2>
+        <div className="mt-8">
+          <SectionHeader title="Milestones" />
           <ul className="mt-2 space-y-1">
             {milestones.map((m) => (
               <li key={m.id} className="flex items-center gap-2 text-sm">
                 <span>{m.status === "COMPLETED" ? "✓" : "○"}</span>
-                <span className={m.status === "COMPLETED" ? "text-zinc-400 line-through" : "text-zinc-700 dark:text-zinc-300"}>{m.title}</span>
-                {m.scheduledDate && <span className="text-xs text-zinc-400">by {formatDate(m.scheduledDate)}</span>}
+                <span className={m.status === "COMPLETED" ? "text-fg-subtle line-through" : "text-fg"}>{m.title}</span>
+                {m.scheduledDate && <span className="text-xs text-fg-subtle">by {formatDate(m.scheduledDate)}</span>}
               </li>
             ))}
           </ul>
-        </>
+        </div>
       )}
 
       {Array.isArray(roadmap.recommendations) && roadmap.recommendations.length > 0 && (
-        <>
-          <h2 className="mt-8 text-sm font-medium text-zinc-500">Recommendations</h2>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+        <div className="mt-8">
+          <SectionHeader title="Recommendations" />
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-fg">
             {(roadmap.recommendations as string[]).map((r, i) => (
               <li key={i}>{r}</li>
             ))}
           </ul>
-        </>
+        </div>
       )}
 
       {Array.isArray(roadmap.risks) && roadmap.risks.length > 0 && (
-        <>
-          <h2 className="mt-8 text-sm font-medium text-zinc-500">Risks</h2>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+        <div className="mt-8">
+          <SectionHeader title="Risks" />
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-fg">
             {(roadmap.risks as string[]).map((r, i) => (
               <li key={i}>{r}</li>
             ))}
           </ul>
-        </>
+        </div>
       )}
     </div>
   );
