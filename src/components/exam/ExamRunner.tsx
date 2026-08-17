@@ -120,6 +120,13 @@ export function ExamRunner({ courseId, examId }: { courseId: string; examId: str
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tickSeconds != null, load.status]);
 
+  // Phase 19 §19.18 — a screen reader shouldn't hear the countdown every
+  // second (that would drown out everything else). This is derived, not
+  // effect-driven state: the live region's text stays identical on every
+  // render while under a minute, so a screen reader announces it once when
+  // it first appears and stays silent on every re-render after that.
+  const lowTimeRemaining = tickSeconds != null && tickSeconds < 60;
+
   const questions = useMemo(() => (load.status === "ready" ? load.data.questions : []), [load]);
   const current = questions[index] ?? null;
   const draft = current ? (drafts[current.id] ?? emptyDraft()) : emptyDraft();
@@ -226,9 +233,20 @@ export function ExamRunner({ courseId, examId }: { courseId: string; examId: str
           Question {index + 1} / {questions.length}
         </p>
         {tickSeconds != null && (
-          <p className={`font-mono text-sm ${tickSeconds < 60 ? "font-semibold text-danger" : "text-fg-muted"}`}>{formatTime(tickSeconds)}</p>
+          <p
+            role="timer"
+            aria-label={`Time remaining: ${formatTime(tickSeconds)}`}
+            className={`font-mono text-sm ${tickSeconds < 60 ? "font-semibold text-danger" : "text-fg-muted"}`}
+          >
+            {formatTime(tickSeconds)}
+          </p>
         )}
       </div>
+      {lowTimeRemaining && (
+        <span className="sr-only" role="status" aria-live="polite">
+          Less than one minute remaining.
+        </span>
+      )}
       <div className="mt-3">
         <ProgressBar value={questions.length > 0 ? (index + (current?.answered ? 1 : 0)) / questions.length : 0} label="Exam progress" />
       </div>
