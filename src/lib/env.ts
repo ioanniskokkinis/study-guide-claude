@@ -86,6 +86,25 @@ const envSchema = z.object({
   // with per-week reasons and priority explanations needs more room than a
   // single evaluation/hint (see src/lib/ai/token-budgets.ts).
   AI_STUDY_ADVISOR_MAX_TOKENS: z.coerce.number().int().positive().default(2500),
+  // Phase 19 §19.7: generalizes the timeout pattern AI_ACTIVE_RECALL_EVALUATION_TIMEOUT_MS
+  // established for exactly one call site (ANSWER_EVALUATION) to every other
+  // Claude call in the app — before this, an audit found 18 of 19 call sites
+  // ran with no application-level bound at all, inheriting only the SDK's own
+  // multi-minute default. Grouped by the same output-shape categories as
+  // AI_MAX_TOKENS (see src/lib/ai/timeout-budgets.ts for exactly which
+  // requestType maps to which timeout).
+  AI_HINT_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  AI_TUTOR_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  AI_EVALUATION_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  AI_EXAM_TIMEOUT_MS: z.coerce.number().int().positive().default(25_000),
+  AI_STUDY_ADVISOR_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+  AI_QUESTION_GENERATION_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  // Knowledge-graph extraction calls (concept/relationship/prerequisite
+  // extraction, semantic dedup) — these already have their own batch-level
+  // retry/fallback (extractStructuredWithRetry), so this exists purely to
+  // stop one hung call from stalling an entire rebuild batch, not to change
+  // their best-effort failure handling.
+  AI_KNOWLEDGE_EXTRACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

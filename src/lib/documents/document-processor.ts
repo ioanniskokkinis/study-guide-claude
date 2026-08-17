@@ -95,8 +95,14 @@ export async function processDocument(documentId: string): Promise<void> {
       });
     });
   } catch (error) {
-    const message =
-      error instanceof NoExtractableTextError
+    // Phase 19 §19.9: distinguish "the file is missing on disk" (a storage-layer
+    // incident — lost volume, manual deletion, dev-container reset) from every
+    // other extraction failure, so whoever triages a batch of FAILED documents
+    // isn't left guessing which category they're looking at.
+    const isMissingFile = error instanceof Error && "code" in error && error.code === "ENOENT";
+    const message = isMissingFile
+      ? "The uploaded file is missing from storage and needs to be re-uploaded."
+      : error instanceof NoExtractableTextError
         ? error.message
         : "The document could not be processed.";
 

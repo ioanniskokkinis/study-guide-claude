@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { extractStructuredWithRetry } from "@/lib/ai/structured-retry";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import type { CandidateConcept, CandidateConceptEvidence } from "./concept-extractor";
 import { MAX_SEMANTIC_DUPLICATE_GROUPS } from "./config";
 
@@ -103,6 +104,7 @@ export async function findSemanticDuplicateGroups(
       schema: SemanticDuplicateSchema,
       requestType: "concept_dedup",
       userId: options?.userId,
+      timeoutMs: AI_TIMEOUT_MS.KNOWLEDGE_EXTRACTION,
     },
     // A too-large or truncated response is far more likely with many names — retry once more with half the list.
     names.length > 4

@@ -560,6 +560,9 @@ async function recordExamEvidence(examId: string, userId: string, mistakesByQues
 
   for (const answer of answers) {
     if (answer.classification === "UNANSWERED") continue;
+    // Already recorded on a prior (possibly crashed-mid-grading) call — never a second
+    // LearningAttempt/KnowledgeEvidence for the same exam answer (Phase 19 §19.6).
+    if (answer.attemptId) continue;
     const evidenceScore = evidenceScoreForExamAnswer(answer.score ?? 0, answer.hintsUsed, answer.revealedAnswer);
     if (evidenceScore === null) continue; // revealed answers produce no independent evidence (spec §15).
 
@@ -595,7 +598,20 @@ async function recordExamEvidence(examId: string, userId: string, mistakesByQues
   }
 }
 
-/** Idempotent (spec §56): a second call on an already-graded exam just returns the existing result rather than re-grading. */
+/**
+ * Idempotent (spec §56): a second call on an already-graded exam just
+ * returns the existing result rather than re-grading. Also recoverable
+ * (Phase 19 §19.6/§19.10) from a crash mid-grading: SUBMITTED is an
+ * accepted retry-entry status (not just ACTIVE/EXPIRED) since this
+ * function itself is what transitions ACTIVE/EXPIRED -> SUBMITTED before
+ * doing the (potentially slow, AI-calling) grading work below — without
+ * this, a process death between those two writes left the exam
+ * permanently stuck (SUBMITTED is neither ACTIVE/EXPIRED, so a retry
+ * would previously throw ExamNotActiveError forever). recordExamEvidence
+ * and the examResult write are themselves made idempotent below so a
+ * retry from SUBMITTED never double-records evidence or double-creates
+ * the result row.
+ */
 export async function submitExam(examId: string, userId: string): Promise<ExamResultSummary> {
   const exam = await loadOwnedExam(examId, userId);
   if (!exam) throw new ExamNotFoundError();
@@ -604,7 +620,7 @@ export async function submitExam(examId: string, userId: string): Promise<ExamRe
     const existing = await getExamResult(examId, userId);
     if (existing) return existing;
   }
-  if (exam.status !== "ACTIVE" && exam.status !== "EXPIRED") throw new ExamNotActiveError();
+  if (exam.status !== "ACTIVE" && exam.status !== "EXPIRED" && exam.status !== "SUBMITTED") throw new ExamNotActiveError();
 
   const questions = await prisma.examQuestion.findMany({ where: { examId }, include: { answer: true } });
   for (const q of questions) {
@@ -626,23 +642,30 @@ export async function submitExam(examId: string, userId: string): Promise<ExamRe
   const readiness = await calculateReadiness(userId, exam.courseId);
   const nextAction = await recommendNextAction({ userId, courseId: exam.courseId, mistakes, readiness });
 
-  await prisma.examResult.create({
-    data: {
-      examId,
-      overallScore: aggregate.overallScore,
-      percentage: aggregate.percentage,
-      passed: aggregate.passed,
-      totalQuestions: aggregate.totalQuestions,
-      correctAnswers: aggregate.correctAnswers,
-      partialAnswers: aggregate.partialAnswers,
-      incorrectAnswers: aggregate.incorrectAnswers,
-      unanswered: aggregate.unanswered,
-      timeSpentSeconds: aggregate.timeSpentSeconds,
-      conceptScores: aggregate.conceptScores as unknown as Prisma.InputJsonValue,
-      cognitiveScores: aggregate.cognitiveScores as unknown as Prisma.InputJsonValue,
-      mistakeSummary: { ...aggregate.mistakeSummary, nextAction, readiness } as unknown as Prisma.InputJsonValue,
-      readinessScore: readiness.readiness,
-    },
+  // upsert, not create: a crash between this write and the status->GRADED
+  // update below would otherwise make a retry hit ExamResult's unique
+  // examId constraint (Phase 19 §19.6) — the recomputed aggregate here is
+  // deterministic from already-persisted ExamAnswer rows, so overwriting a
+  // partial/duplicate result with the same recomputation is safe.
+  const resultData = {
+    overallScore: aggregate.overallScore,
+    percentage: aggregate.percentage,
+    passed: aggregate.passed,
+    totalQuestions: aggregate.totalQuestions,
+    correctAnswers: aggregate.correctAnswers,
+    partialAnswers: aggregate.partialAnswers,
+    incorrectAnswers: aggregate.incorrectAnswers,
+    unanswered: aggregate.unanswered,
+    timeSpentSeconds: aggregate.timeSpentSeconds,
+    conceptScores: aggregate.conceptScores as unknown as Prisma.InputJsonValue,
+    cognitiveScores: aggregate.cognitiveScores as unknown as Prisma.InputJsonValue,
+    mistakeSummary: { ...aggregate.mistakeSummary, nextAction, readiness } as unknown as Prisma.InputJsonValue,
+    readinessScore: readiness.readiness,
+  };
+  await prisma.examResult.upsert({
+    where: { examId },
+    create: { examId, ...resultData },
+    update: resultData,
   });
 
   await prisma.exam.update({ where: { id: exam.id }, data: { status: "GRADED" } });
@@ -762,6 +785,11 @@ export function examErrorStatus(error: unknown): { status: number; message: stri
   if (error instanceof NoConceptsAvailableError) return { status: 422, message: error.message };
   if (error instanceof QuestionNotFoundError) return { status: 404, message: error.message };
   if (error instanceof ExamGenerationFailedError) return { status: 502, message: error.message };
-  if (error instanceof Error) return { status: 400, message: error.message };
-  return { status: 500, message: "Something went wrong." };
+  // Phase 19 §19.4: an unrecognized error (Prisma, filesystem, provider
+  // internals) must never have its raw .message forwarded to the client —
+  // only the named, author-controlled error classes above are trusted to
+  // carry a safe, user-facing message. Log the real error server-side and
+  // return a generic one instead.
+  console.error("[exam] unhandled error:", error);
+  return { status: 500, message: "Something went wrong. Please try again." };
 }

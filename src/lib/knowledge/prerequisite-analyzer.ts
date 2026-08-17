@@ -1,4 +1,5 @@
 import { extractStructuredWithRetry, StructuredExtractionFailedError } from "@/lib/ai/structured-retry";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import {
   buildPrerequisiteAnalysisPrompt,
   PrerequisiteAnalysisSchema,
@@ -49,6 +50,7 @@ export async function extractPrerequisites(
         requestType: "prerequisite_analysis",
         effort: "medium",
         userId: options?.userId,
+        timeoutMs: AI_TIMEOUT_MS.KNOWLEDGE_EXTRACTION,
       }));
     } catch (error) {
       if (!(error instanceof StructuredExtractionFailedError)) throw error;

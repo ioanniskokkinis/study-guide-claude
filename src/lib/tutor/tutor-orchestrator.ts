@@ -65,6 +65,10 @@ export class ConceptNotFoundError extends Error {
   }
 }
 
+/** A genuine user-input problem (empty/too-long message) — the one place this module's
+ * validation throws a message that's actually safe to forward to the client (Phase 19 §19.4). */
+export class MessageValidationError extends Error {}
+
 const MAX_MESSAGE_LENGTH = 4000;
 
 /**
@@ -759,8 +763,8 @@ async function prepareTurn(params: {
   if (session.status !== "ACTIVE") throw new TutorSessionNotActiveError();
 
   const content = params.content.trim();
-  if (content.length === 0) throw new Error("Message cannot be empty.");
-  if (content.length > MAX_MESSAGE_LENGTH) throw new Error(`Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`);
+  if (content.length === 0) throw new MessageValidationError("Message cannot be empty.");
+  if (content.length > MAX_MESSAGE_LENGTH) throw new MessageValidationError(`Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`);
 
   const studentMessageType = await lastTutorMessageType(session.id);
   await prisma.tutorMessage.create({
@@ -1317,8 +1321,14 @@ export function tutorSessionErrorStatus(error: unknown): { status: number; messa
   if (error instanceof TutorSessionNotFoundError) return { status: 404, message: error.message };
   if (error instanceof TutorSessionNotActiveError) return { status: 409, message: error.message };
   if (error instanceof ConceptNotFoundError) return { status: 404, message: error.message };
-  if (error instanceof Error) return { status: 400, message: error.message };
-  return { status: 500, message: "Something went wrong." };
+  if (error instanceof MessageValidationError) return { status: 400, message: error.message };
+  // Phase 19 §19.4: an unrecognized error (Prisma, filesystem, provider
+  // internals) must never have its raw .message forwarded to the client —
+  // only the named, author-controlled error classes above are trusted to
+  // carry a safe, user-facing message. Log the real error server-side and
+  // return a generic one instead.
+  console.error("[tutor] unhandled error:", error);
+  return { status: 500, message: "Something went wrong. Please try again." };
 }
 
 export type { DecisionResult };

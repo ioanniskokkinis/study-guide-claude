@@ -3,6 +3,7 @@ import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
 import { extractStructuredWithRetry } from "@/lib/ai/structured-retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import {
   buildAnswerGradingPrompt,
   buildExamQuestionGenerationPrompt,
@@ -38,6 +39,7 @@ export async function generateExamQuestionContent(
     maxTokens: AI_MAX_TOKENS.EXAM,
     requestType: "EXAM_QUESTION_GENERATION",
     userId,
+    timeoutMs: AI_TIMEOUT_MS.EXAM,
   });
   return ExamQuestionGenerationSchema.parse(data);
 }
@@ -66,6 +68,7 @@ export async function gradeExamAnswer(ctx: AnswerGradingContext, userId: string)
         maxTokens: AI_MAX_TOKENS.EVALUATION,
         requestType: "EXAM_ANSWER_GRADING",
         userId,
+        timeoutMs: AI_TIMEOUT_MS.EVALUATION,
       }),
     );
     return AnswerGradingSchema.parse(data);
@@ -91,6 +94,7 @@ export async function generateOralExaminerMessage(ctx: OralExaminerContext, user
         maxTokens: AI_MAX_TOKENS.HINT,
         requestType: "EXAM_ORAL_EXAMINER",
         userId,
+        timeoutMs: AI_TIMEOUT_MS.HINT,
       }),
     );
     return OralExaminerMessageSchema.parse(data).message;

@@ -261,6 +261,44 @@ describe("exam orchestrator (integration)", () => {
     expect(resultCount).toBe(1);
   });
 
+  it("Phase 19 §19.6/§19.10 regression: a crash between status->SUBMITTED and status->GRADED is recoverable — retrying from SUBMITTED never double-records evidence or duplicates the result", async () => {
+    const exam = await createExam({
+      courseId,
+      userId,
+      mode: "WRITTEN",
+      questionCount: 3,
+      durationMinutes: 20,
+      difficulty: 2,
+      allowHints: false,
+      allowSources: false,
+      passingScore: 0.75,
+    });
+    await startExam(exam.id, userId);
+
+    const first = await submitExam(exam.id, userId);
+    const attemptsAfterFirst = await prisma.learningAttempt.count({ where: { userId } });
+
+    // Simulate a process death after the first submitExam() call already flipped
+    // status -> GRADED and wrote everything through — roll status back to
+    // SUBMITTED (what it would look like mid-flight, before the final write)
+    // and confirm a retry from there reuses the already-recorded evidence and
+    // result instead of creating duplicates.
+    await prisma.exam.update({ where: { id: exam.id }, data: { status: "SUBMITTED" } });
+
+    const second = await submitExam(exam.id, userId);
+    expect(second.examId).toBe(first.examId);
+    expect(second.percentage).toBe(first.percentage);
+
+    const resultCount = await prisma.examResult.count({ where: { examId: exam.id } });
+    expect(resultCount).toBe(1);
+
+    const attemptsAfterSecond = await prisma.learningAttempt.count({ where: { userId } });
+    expect(attemptsAfterSecond).toBe(attemptsAfterFirst);
+
+    const examAfter = await prisma.exam.findUniqueOrThrow({ where: { id: exam.id } });
+    expect(examAfter.status).toBe("GRADED");
+  });
+
   it("submitting updates the Student Knowledge Model (spec §23, §64)", async () => {
     const exam = await createExam({
       courseId,

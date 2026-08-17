@@ -242,6 +242,49 @@ describe("study-session (Active Recall)", () => {
     await completeSession(state!.session.id, userId);
   });
 
+  it("Phase 19 §19.6 regression: two concurrent evaluate requests for the same answer never both call recordLearningOutcome (no duplicate LearningAttempt)", async () => {
+    const state = await getOrStartSession(userId, courseId);
+    const sq = state!.currentSessionQuestion!;
+
+    await submitAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id, answerText: "It tracks connection state." });
+    const attemptsBefore = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+
+    // Two requests racing for the same not-yet-evaluated answer — the atomic
+    // PENDING -> EVALUATING claim must let exactly one of them actually run
+    // Claude + recordLearningOutcome(). The loser observes "already handled"
+    // and returns whatever snapshot it read: COMPLETED if it read after the
+    // winner finished settling, or a still-in-flight EVALUATING otherwise —
+    // both are safe outcomes (the client's UI already treats EVALUATING like
+    // FAILED: a retryable "couldn't evaluate right now" state), so this only
+    // asserts the one invariant that actually matters: never two Claude
+    // calls, never two LearningAttempt rows.
+    const [first, second] = await Promise.all([
+      evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id }),
+      evaluateSubmittedAnswer({ sessionId: state!.session.id, userId, sessionQuestionId: sq.id }),
+    ]);
+
+    for (const result of [first, second]) {
+      expect(["COMPLETED", "EVALUATING"]).toContain(result.answer.evaluationStatus);
+    }
+
+    // By the time both promises have resolved, the winner's settle transaction is
+    // guaranteed complete — assert the actual, final DB state, not either response's
+    // possibly-stale snapshot.
+    const finalAnswer = await prisma.answer.findUniqueOrThrow({ where: { id: first.answer.id } });
+    expect(finalAnswer.evaluationStatus).toBe("COMPLETED");
+    expect(finalAnswer.attemptId).toBeTruthy();
+
+    const attemptsAfter = await prisma.learningAttempt.count({ where: { userId, conceptId } });
+    expect(attemptsAfter).toBe(attemptsBefore + 1);
+
+    const evalCalls = vi.mocked(extractStructured).mock.calls.filter((c) => c[0].requestType === "ANSWER_EVALUATION").length;
+    expect(evalCalls).toBe(1);
+
+    await completeSession(state!.session.id, userId);
+
+    await completeSession(state!.session.id, userId);
+  });
+
   it("a Claude timeout settles the answer into a recoverable TIMEOUT state, never fabricates mastery evidence, and a subsequent retry can still succeed", async () => {
     const state = await getOrStartSession(userId, courseId);
     const sq = state!.currentSessionQuestion!;

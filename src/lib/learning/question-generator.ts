@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import {
   buildQuestionGenerationPrompt,
   QuestionGenerationSchema,
@@ -171,6 +172,7 @@ export async function getOrGenerateQuestion(params: GenerateQuestionParams): Pro
         maxTokens: AI_MAX_TOKENS.EXAM,
         requestType: params.purpose ?? "QUESTION_GENERATION",
         userId: params.userId,
+        timeoutMs: AI_TIMEOUT_MS.QUESTION_GENERATION,
       }),
     );
 

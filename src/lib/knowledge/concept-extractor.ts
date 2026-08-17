@@ -1,4 +1,5 @@
 import { extractStructuredWithRetry, StructuredExtractionFailedError } from "@/lib/ai/structured-retry";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import { buildConceptExtractionPrompt, ConceptExtractionSchema, type ChunkInput } from "@/lib/ai/prompts/concept-extraction";
 import { CHUNKS_PER_CONCEPT_EXTRACTION_BATCH } from "./config";
 
@@ -59,6 +60,7 @@ async function extractBatch(
       schema: ConceptExtractionSchema,
       requestType: "concept_extraction",
       userId: options?.userId,
+      timeoutMs: AI_TIMEOUT_MS.KNOWLEDGE_EXTRACTION,
     });
     return toConcepts(data, knownChunkIds);
   } catch (error) {

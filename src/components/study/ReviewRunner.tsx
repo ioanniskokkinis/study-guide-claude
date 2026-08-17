@@ -21,7 +21,7 @@ interface QuestionDTO {
   prompt: string;
 }
 
-type EvaluationStatus = "PENDING" | "COMPLETED" | "FAILED" | "TIMEOUT";
+type EvaluationStatus = "PENDING" | "EVALUATING" | "COMPLETED" | "FAILED" | "TIMEOUT";
 
 interface AnswerDTO {
   id: string;

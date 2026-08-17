@@ -1,5 +1,7 @@
 import { extractStructured } from "@/lib/ai/claude";
+import { withRetry } from "@/lib/ai/retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import { env } from "@/lib/env";
 import {
   buildStudyAdvisorPrompt,
@@ -30,17 +32,25 @@ export interface GenerateRoadmapParams {
 export async function generateRoadmapWithAi(params: GenerateRoadmapParams): Promise<StudyAdvisorAiOutput> {
   const { system, prompt } = buildStudyAdvisorPrompt(params.input);
 
-  const { data } = await extractStructured({
-    model: env.AI_MODEL_STUDY_ADVISOR,
-    system,
-    prompt,
-    schema: StudyAdvisorAiOutputSchema,
-    maxTokens: AI_MAX_TOKENS.STUDY_ADVISOR,
-    effort: "medium",
-    requestType: params.requestType,
-    userId: params.userId,
-    sessionId: params.courseId,
-  });
+  // Phase 19 §19.7: this was the one AI call in the app with neither a
+  // timeout nor a retry — a transient failure failed the whole roadmap
+  // generation immediately, and a hang had no application-level bound at
+  // all. Safe to retry (structured extraction, no side effect beyond an
+  // AiUsageLog row) like every other call site in the codebase.
+  const { data } = await withRetry(() =>
+    extractStructured({
+      model: env.AI_MODEL_STUDY_ADVISOR,
+      system,
+      prompt,
+      schema: StudyAdvisorAiOutputSchema,
+      maxTokens: AI_MAX_TOKENS.STUDY_ADVISOR,
+      effort: "medium",
+      requestType: params.requestType,
+      userId: params.userId,
+      sessionId: params.courseId,
+      timeoutMs: AI_TIMEOUT_MS.STUDY_ADVISOR,
+    }),
+  );
 
   return {
     ...data,

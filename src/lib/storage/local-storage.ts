@@ -52,6 +52,30 @@ export class LocalStorageProvider implements StorageProvider {
       return false;
     }
   }
+
+  async list(): Promise<string[]> {
+    const root = this.root;
+    const keys: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      let entries;
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+        throw error;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(full);
+        } else if (entry.isFile()) {
+          keys.push(path.relative(root, full).split(path.sep).join("/"));
+        }
+      }
+    };
+    await walk(root);
+    return keys;
+  }
 }
 
 export const storage: StorageProvider = new LocalStorageProvider(env.STORAGE_ROOT);

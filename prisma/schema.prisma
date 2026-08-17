@@ -516,6 +516,13 @@ model Question {
 /// the UI must never be stuck showing "evaluating" once one of these is set.
 enum AnswerEvaluationStatus {
   PENDING
+  /// Claimed by an in-flight evaluation attempt (Phase 19 §19.6) — a
+  /// conditional updateMany transitions PENDING/FAILED/TIMEOUT -> EVALUATING
+  /// atomically before the Claude call starts, so two concurrent evaluate
+  /// requests for the same answer can never both call recordLearningOutcome()
+  /// and double-write mastery. A claim stuck here (crashed mid-flight) is
+  /// reclaimable once stale — see STALE_EVALUATION_CLAIM_MS in study-session.ts.
+  EVALUATING
   COMPLETED
   FAILED
   TIMEOUT
@@ -560,10 +567,11 @@ model Answer {
   /// Set if AI evaluation failed/timed out — the answer is preserved
   /// so nothing is lost, and evaluation can be retried (Phase 17 §17/§37).
   evaluationError String?
-  /// Terminal-state tracker for the answer/evaluate split (Phase 17 §19):
-  /// PENDING until an evaluation attempt resolves, then COMPLETED/FAILED/
-  /// TIMEOUT. Evaluation and recordLearningOutcome() only ever run once —
-  /// callers check this before re-evaluating (idempotent retry, §18).
+  /// State tracker for the answer/evaluate split (Phase 17 §19): PENDING ->
+  /// (claimed) EVALUATING -> COMPLETED/FAILED/TIMEOUT. Evaluation and
+  /// recordLearningOutcome() only ever run once per answer — the atomic
+  /// PENDING/FAILED/TIMEOUT -> EVALUATING claim (Phase 19 §19.6) makes this
+  /// safe even under concurrent retry requests, not just sequential ones.
   evaluationStatus AnswerEvaluationStatus @default(PENDING)
   /// Set once recordLearningOutcome() has run for this answer — the resulting attempt/evidence/mastery update.
   attemptId       String?

@@ -99,6 +99,14 @@ export interface StreamTextOptions {
   signal?: AbortSignal;
   /** Optional session/conversation identifier for usage aggregation (Phase 12 §13). */
   sessionId?: string | null;
+  /**
+   * Bounds how long the stream may run with no data at all (Phase 19 §19.7)
+   * — before this, `streamText` had no internal ceiling, only the caller's
+   * own `signal` (typically the HTTP request's own AbortSignal, which never
+   * fires unless the *client* disconnects). Composed with `signal` via
+   * `AbortSignal.any` so neither cancellation path is lost.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -116,6 +124,11 @@ export function streamText(options: StreamTextOptions): MessageStream {
   const anthropic = getClient();
   const startedAt = Date.now();
 
+  const signals: AbortSignal[] = [];
+  if (options.signal) signals.push(options.signal);
+  if (options.timeoutMs != null) signals.push(AbortSignal.timeout(options.timeoutMs));
+  const combinedSignal = signals.length === 0 ? undefined : signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+
   const stream = anthropic.messages.stream(
     {
       model: modelId,
@@ -123,7 +136,7 @@ export function streamText(options: StreamTextOptions): MessageStream {
       system: options.system,
       messages: [{ role: "user", content: options.prompt }],
     },
-    { signal: options.signal },
+    { signal: combinedSignal },
   );
 
   stream.once("finalMessage", (message) => {

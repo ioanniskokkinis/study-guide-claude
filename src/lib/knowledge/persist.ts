@@ -57,6 +57,14 @@ async function reassignConceptHistory(tx: Prisma.TransactionClient, fromConceptI
   await tx.studentMisconception.updateMany({ where: { conceptId: fromConceptId }, data: { conceptId: toConceptId } });
   await tx.question.updateMany({ where: { conceptId: fromConceptId }, data: { conceptId: toConceptId } });
   await tx.examQuestion.updateMany({ where: { conceptId: fromConceptId }, data: { conceptId: toConceptId } });
+  // Phase 19 §19.5 fix: these two carry a denormalized conceptId of their own
+  // (not just inherited through reviewItem/session, which were already
+  // reassigned above) and both cascade-delete on Concept — without this,
+  // deleting the orphaned `fromConceptId` row below silently destroyed
+  // "immutable" ReviewEvent/TutorSessionOutcome history for a concept that
+  // was actually just merged/renamed, not genuinely removed.
+  await tx.reviewEvent.updateMany({ where: { conceptId: fromConceptId }, data: { conceptId: toConceptId } });
+  await tx.tutorSessionOutcome.updateMany({ where: { conceptId: fromConceptId }, data: { conceptId: toConceptId } });
 
   // Move only rows for users who don't already have one on the target concept — the target's own
   // existing progress for that user wins rather than being silently clobbered by a unique-constraint

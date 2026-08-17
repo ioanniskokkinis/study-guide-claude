@@ -12,7 +12,7 @@ import { LoadingState } from "@/components/ui/Skeleton";
 import { StatCard } from "@/components/ui/StatCard";
 
 type Correctness = "SUCCESS" | "PARTIAL" | "FAILURE";
-type EvaluationStatus = "PENDING" | "COMPLETED" | "FAILED" | "TIMEOUT";
+type EvaluationStatus = "PENDING" | "EVALUATING" | "COMPLETED" | "FAILED" | "TIMEOUT";
 
 interface QuestionDTO {
   id: string;

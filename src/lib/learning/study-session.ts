@@ -12,6 +12,7 @@ import type {
 import { extractStructured } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import { buildHintGenerationPrompt, HintGenerationSchema } from "@/lib/ai/prompts/hint-generation";
 import { evaluateAnswer, AnswerEvaluationTimeoutError, type AnswerEvaluationResult } from "@/lib/ai/answer-evaluator";
 import { bucketForStatus } from "@/lib/services/student-knowledge";
@@ -55,6 +56,11 @@ export class SessionCompleteError extends Error {
     super("This session has already reached its target length — complete it to see the summary.");
   }
 }
+
+/** A genuine user-input problem (empty/too-long answer, out-of-range confidence) — the one
+ * place submitAnswer's validation throws a message that's safe to forward to the client
+ * (Phase 19 §19.4), replacing a fragile string-match on plain Error messages. */
+export class AnswerValidationError extends Error {}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -375,10 +381,10 @@ export async function submitAnswer(input: SubmitAnswerInput): Promise<SubmitAnsw
   if (sessionQuestion.answeredAt) throw new QuestionAlreadyAnsweredError();
 
   const answerText = input.answerText.trim();
-  if (answerText.length === 0) throw new Error("Answer cannot be empty.");
-  if (answerText.length > MAX_ANSWER_LENGTH) throw new Error(`Answer is too long (max ${MAX_ANSWER_LENGTH} characters).`);
+  if (answerText.length === 0) throw new AnswerValidationError("Answer cannot be empty.");
+  if (answerText.length > MAX_ANSWER_LENGTH) throw new AnswerValidationError(`Answer is too long (max ${MAX_ANSWER_LENGTH} characters).`);
   if (input.confidence != null && (input.confidence < 1 || input.confidence > 5)) {
-    throw new Error("Confidence must be between 1 and 5.");
+    throw new AnswerValidationError("Confidence must be between 1 and 5.");
   }
 
   const normalizedConfidence = input.confidence != null ? normalizeConfidence(input.confidence) : null;
@@ -452,6 +458,39 @@ export interface EvaluateSubmittedAnswerResult {
 }
 
 /**
+ * A stale EVALUATING claim (crashed mid-flight, server restart) becomes
+ * reclaimable after this long — generous headroom over the Claude call's
+ * own timeout so a legitimately in-flight evaluation is never reclaimed
+ * out from under itself (Phase 19 §19.6).
+ */
+const STALE_EVALUATION_CLAIM_MS = env.AI_ACTIVE_RECALL_EVALUATION_TIMEOUT_MS * 2;
+
+/**
+ * Atomically claims the right to evaluate `answerId` by transitioning it to
+ * EVALUATING, so two concurrent evaluate requests for the same answer (a
+ * double-click retry, an overlapping poll) can never both call Claude and
+ * recordLearningOutcome() — only one `updateMany` can match the row first
+ * (Phase 19 §19.6; ANSWER_EVALUATION and recordLearningOutcome() were
+ * otherwise the one place in the app with no DB-level idempotency guard,
+ * relying entirely on a read-then-act check with a race window). Returns
+ * "claimed" if this call won the race, "already-handled" if another
+ * request already owns it (COMPLETED or a still-fresh EVALUATING claim).
+ */
+async function claimEvaluation(answerId: string): Promise<"claimed" | "already-handled"> {
+  const claimed = await prisma.answer.updateMany({
+    where: {
+      id: answerId,
+      OR: [
+        { evaluationStatus: { in: ["PENDING", "FAILED", "TIMEOUT"] } },
+        { evaluationStatus: "EVALUATING", updatedAt: { lt: new Date(Date.now() - STALE_EVALUATION_CLAIM_MS) } },
+      ],
+    },
+    data: { evaluationStatus: "EVALUATING" },
+  });
+  return claimed.count > 0 ? "claimed" : "already-handled";
+}
+
+/**
  * Runs (or re-runs) Claude evaluation for an already-persisted answer
  * (Phase 17 §13/§18). Idempotent: if this answer's evaluation already
  * COMPLETED — including a deterministic fast-path match from submitAnswer,
@@ -479,6 +518,11 @@ export async function evaluateSubmittedAnswer(params: {
 
   if (answer.evaluationStatus === "COMPLETED") {
     return { answer, session };
+  }
+
+  if ((await claimEvaluation(answer.id)) === "already-handled") {
+    const current = await prisma.answer.findUniqueOrThrow({ where: { id: answer.id } });
+    return { answer: current, session };
   }
 
   const question = sessionQuestion.question;
@@ -571,6 +615,7 @@ export async function requestHint(params: {
       maxTokens: AI_MAX_TOKENS.HINT,
       requestType: "HINT_GENERATION",
       userId: params.userId,
+      timeoutMs: AI_TIMEOUT_MS.HINT,
     }),
   );
 
@@ -880,9 +925,7 @@ export function studySessionErrorStatus(error: unknown): { status: number; messa
   if (error instanceof QuestionAlreadyAnsweredError) return { status: 409, message: error.message };
   if (error instanceof SessionCompleteError) return { status: 409, message: error.message };
   if (error instanceof QuestionGenerationFailedError) return { status: 502, message: error.message };
-  if (error instanceof Error && (error.message.includes("Answer") || error.message.includes("Confidence"))) {
-    return { status: 400, message: error.message };
-  }
+  if (error instanceof AnswerValidationError) return { status: 400, message: error.message };
   console.error("Study session operation failed:", error);
   return { status: 500, message: "Something went wrong. Please try again." };
 }

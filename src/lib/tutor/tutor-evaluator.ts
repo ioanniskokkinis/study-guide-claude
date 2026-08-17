@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { extractStructured, streamText, MidStreamGenerationError } from "@/lib/ai/claude";
 import { withRetry } from "@/lib/ai/retry";
 import { AI_MAX_TOKENS } from "@/lib/ai/token-budgets";
+import { AI_TIMEOUT_MS } from "@/lib/ai/timeout-budgets";
 import {
   buildExplanationPrompt,
   buildExplanationPromptText,
@@ -79,6 +80,7 @@ export async function evaluateStudentResponse(
         requestType: "TUTOR_RESPONSE_EVALUATION",
         userId: ctx.userId,
         sessionId: ctx.sessionId,
+        timeoutMs: AI_TIMEOUT_MS.EVALUATION,
       }),
     );
     return ResponseEvaluationSchema.parse(data);
@@ -113,6 +115,7 @@ export async function generateSocraticMessage(
         requestType: "TUTOR_SOCRATIC_MESSAGE",
         userId: ctx.userId,
         sessionId: ctx.sessionId,
+        timeoutMs: AI_TIMEOUT_MS.TUTOR,
       }),
     );
     return data.message;
@@ -152,6 +155,7 @@ export async function* generateSocraticMessageStream(
       userId: ctx.userId,
       sessionId: ctx.sessionId,
       signal: ctx.signal,
+      timeoutMs: AI_TIMEOUT_MS.TUTOR,
     });
     for await (const event of stream) {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
@@ -190,6 +194,7 @@ export async function generateHint(
         requestType: "TUTOR_HINT",
         userId: ctx.userId,
         sessionId: ctx.sessionId,
+        timeoutMs: AI_TIMEOUT_MS.HINT,
       }),
     );
     return data.message;
@@ -220,6 +225,7 @@ export async function* generateHintStream(
       userId: ctx.userId,
       sessionId: ctx.sessionId,
       signal: ctx.signal,
+      timeoutMs: AI_TIMEOUT_MS.HINT,
     });
     for await (const event of stream) {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
@@ -266,6 +272,7 @@ export async function generateExplanation(
         requestType: "TUTOR_EXPLANATION",
         userId: ctx.userId,
         sessionId: ctx.sessionId,
+        timeoutMs: AI_TIMEOUT_MS.TUTOR,
       }),
     );
     return ExplanationContentSchema.parse(data);
@@ -308,6 +315,7 @@ export async function* generateExplanationStream(
       userId: ctx.userId,
       sessionId: ctx.sessionId,
       signal: ctx.signal,
+      timeoutMs: AI_TIMEOUT_MS.TUTOR,
     });
     for await (const event of stream) {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
@@ -353,6 +361,7 @@ export async function evaluateTeachBack(
         requestType: "TUTOR_TEACH_BACK_EVALUATION",
         userId: ctx.userId,
         sessionId: ctx.sessionId,
+        timeoutMs: AI_TIMEOUT_MS.EVALUATION,
       }),
     );
     return TeachBackEvaluationSchema.parse(data);

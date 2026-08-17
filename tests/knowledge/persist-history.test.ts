@@ -208,4 +208,57 @@ describe("Knowledge Graph rebuild preserves student learning history", () => {
     const conceptARow = await prisma.concept.findUnique({ where: { id: conceptA.id } });
     expect(conceptARow).toBeNull();
   });
+
+  /**
+   * Phase 19 §19.5 regression: `ReviewEvent` and `TutorSessionOutcome` each
+   * carry their own denormalized `conceptId` (not just inherited through
+   * their parent `ReviewItem`/`TutorSession`, which reassignConceptHistory
+   * already handled) and both `onDelete: Cascade` on Concept. Before the
+   * fix, a rebuild that merged/renamed a concept correctly moved the parent
+   * rows but left these two still pointing at the doomed `fromConceptId`,
+   * so deleting the orphan silently cascade-deleted supposedly-immutable
+   * review/tutor-outcome history for a concept that was never really gone.
+   */
+  it("reassigns ReviewEvent.conceptId and TutorSessionOutcome.conceptId (not just their parent rows) so a rebuild never cascade-deletes them", async () => {
+    const { course, chunk } = await seedCourseWithChunk(userId, "Transport-layer flow control paces sender to receiver.");
+    mockPipeline("Flow Control", chunk.id);
+    await buildKnowledgeGraph(course.id, { userId });
+
+    const oldConcept = await prisma.concept.findFirstOrThrow({ where: { courseId: course.id } });
+
+    const attempt = await prisma.learningAttempt.create({
+      data: { userId, conceptId: oldConcept.id, activityType: "RECALL", score: 0.9, correctness: 0.9 },
+    });
+    const reviewItem = await prisma.reviewItem.create({
+      data: { userId, courseId: course.id, conceptId: oldConcept.id, status: "REVIEW", nextReviewAt: new Date(Date.now() + 86_400_000) },
+    });
+    const reviewEvent = await prisma.reviewEvent.create({
+      data: { reviewItemId: reviewItem.id, userId, conceptId: oldConcept.id, attemptId: attempt.id, outcome: "GOOD", previousInterval: 1, newInterval: 3 },
+    });
+    const tutorSession = await prisma.tutorSession.create({
+      data: { userId, courseId: course.id, conceptId: oldConcept.id, mode: "SOCRATIC", status: "COMPLETED" },
+    });
+    const tutorOutcome = await prisma.tutorSessionOutcome.create({
+      data: { sessionId: tutorSession.id, conceptId: oldConcept.id, masteryDelta: 0.1 },
+    });
+
+    // Rebuild with a re-worded name for the same source chunk — oldConcept becomes an orphan
+    // reassigned onto the new concept, then deleted.
+    mockPipeline("Flow-Control Windowing", chunk.id);
+    await buildKnowledgeGraph(course.id, { userId });
+
+    const newConcept = await prisma.concept.findFirstOrThrow({ where: { courseId: course.id } });
+    expect(newConcept.id).not.toBe(oldConcept.id);
+
+    const reviewEventAfter = await prisma.reviewEvent.findUnique({ where: { id: reviewEvent.id } });
+    expect(reviewEventAfter).not.toBeNull();
+    expect(reviewEventAfter!.conceptId).toBe(newConcept.id);
+
+    const tutorOutcomeAfter = await prisma.tutorSessionOutcome.findUnique({ where: { id: tutorOutcome.id } });
+    expect(tutorOutcomeAfter).not.toBeNull();
+    expect(tutorOutcomeAfter!.conceptId).toBe(newConcept.id);
+
+    const oldConceptRow = await prisma.concept.findUnique({ where: { id: oldConcept.id } });
+    expect(oldConceptRow).toBeNull();
+  });
 });
